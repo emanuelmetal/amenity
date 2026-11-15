@@ -1,0 +1,19 @@
+-- Rebuilds the full-text index from base tables. Run after every publish and
+-- after restoring a backup (wrangler d1 export does not include FTS tables).
+-- Restricted pages are never indexed.
+DELETE FROM search_fts;
+
+INSERT INTO search_fts (entity_type, entity_id, page_id, title, body)
+SELECT 'page', p.id, p.id, d.title || ' · página ' || p.page_no, p.text
+FROM pages p JOIN documents d ON d.id = p.document_id
+WHERE p.restricted = 0 AND length(p.text) > 0;
+
+INSERT INTO search_fts (entity_type, entity_id, page_id, title, body)
+SELECT 'article', a.id, json_extract(a.page_ids_json, '$[0]'),
+       COALESCE(d.title || ' · ', '') || 'Artículo ' || a.numero || COALESCE(' · ' || a.titulo, ''), a.texto
+FROM reglamento_articles a LEFT JOIN documents d ON d.id = a.document_id;
+
+INSERT INTO search_fts (entity_type, entity_id, page_id, title, body)
+SELECT 'expense', e.id, e.page_id, e.concepto,
+       e.rubro || ' ' || COALESCE(e.subcategoria, '') || ' ' || e.concepto || ' ' || COALESCE(e.detalle, '') || ' ' || COALESCE(e.proveedor, '')
+FROM expense_lines e;

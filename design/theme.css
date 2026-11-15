@@ -1,0 +1,64 @@
+/* Torre 3 portal — design tokens (Tailwind CSS v4)
+   Visual language modelled on the Eyris admin template's public demo (measured 2026-11-14).
+   Tokens only: write our own components; don't copy the template's code, logo or name. */
+
+@import "tailwindcss";
+
+/* Geist is OFL-licensed: `npm i @fontsource-variable/geist` (or the `geist` package) */
+@import "@fontsource-variable/geist";
+
+@custom-variant dark (&:where(.dark, .dark *));
+
+@theme {
+  --font-sans: "Geist Variable", "Geist", ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, Arial, sans-serif;
+
+  /* Neutral scale (replaces Tailwind's gray) */
+  --color-gray-50: #fafafa;   /* app background */
+  --color-gray-100: #f5f5f5;  /* KPI tray, active nav, input addon */
+  --color-gray-200: #e5e5e5;  /* borders, dividers */
+  --color-gray-300: #d5d7da;  /* input borders */
+  --color-gray-400: #a4a7ae;  /* placeholders, disabled */
+  --color-gray-500: #717680;  /* body / secondary text */
+  --color-gray-600: #535862;
+  --color-gray-700: #404040;  /* nav item text */
+  --color-gray-800: #262626;
+  --color-gray-900: #171717;  /* headings, values */
+  --color-gray-950: #0a0a0a;  /* dark-mode background */
+
+  /* Brand and semantic colors */
+  --color-primary: #286cf0;
+  --color-primary-deep: #1f56c0;    /* hover/pressed */
+  --color-primary-mild: #4c86f4;
+  --color-primary-subtle: #286cf01a;
+  --color-success: #00a85b;
+  --color-success-subtle: #05eb7624;
+  --color-error: #eb4137;
+  --color-error-subtle: #eb41371a;
+  --color-warning: #f59e0b;
+  --color-warning-subtle: #ffd40045;
+  --color-info: #3380fa;
+  --color-info-subtle: #2a85ff1a;
+
+  /* Chart series, in this order */
+  --color-chart-1: #286cf0; /* blue */
+  --color-chart-2: #8c62ff; /* violet */
+  --color-chart-3: #05aed3; /* cyan */
+  --color-chart-4: #00c27f; /* green */
+  --color-chart-5: #f59e0b; /* amber */
+  --color-chart-6: #eb4137; /* red: reserve for negative values only */
+
+  /* Radii: Tailwind defaults; the template uses lg (8px) almost everywhere */
+  --radius-md: 0.375rem; /* tags, small inputs, segmented control */
+  --radius-lg: 0.5rem;   /* cards, inputs, buttons, panels */
+
+  --shadow-card: 0 0.125rem 0.25rem #00000026;
+  --shadow-menu: 0 48px 64px -16px #00000040;
+}
+
+/* Base */
+html { font-family: var(--font-sans); }
+body { background: var(--color-gray-50); color: var(--color-gray-500); font-size: 0.875rem; line-height: 1.5; }
+h1, h2, h3, h4, h5, h6 { color: var(--color-gray-900); font-weight: 600; }
+
+/* Dark mode (optional, phase 2+) */
+.dark body { background: var(--color-gray-950); color: var(--color-gray-400); }

@@ -1,36 +1,22 @@
-# See https://help.github.com/articles/ignoring-files/ for more about ignoring files.
+# Personal data: never commit
+/data/
 
-# dependencies
-/node_modules
-/.pnp
-.pnp.js
+# Node / web
+node_modules/
+dist/
+.wrangler/
+.dev.vars
+*.tsbuildinfo
 
-# testing
-/coverage
-
-# next.js
-/.next/
-/out/
-
-# production
-/build
+# Python
+.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+.ruff_cache/
 
 # misc
 .DS_Store
 *.pem
-
-# debug
-npm-debug.log*
-yarn-debug.log*
-yarn-error.log*
-
-# local env files
-.env*.local
 .env
-
-# vercel
-.vercel
-
-# typescript
-*.tsbuildinfo
-next-env.d.ts
+.env*.local

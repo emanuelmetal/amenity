@@ -1,0 +1,33 @@
+[project]
+name = "alas3"
+version = "0.1.0"
+description = "Torre 3 portal ingestion pipeline"
+requires-python = ">=3.12,<3.13"
+dependencies = [
+  "pydantic>=2.9",
+  "pymupdf>=1.25,<2",  # 2.x pulls onnxruntime: no Intel-macOS wheels,
+  "pillow>=11",
+  "pyyaml>=6",
+  "rapidfuzz>=3.10",
+]
+
+[dependency-groups]
+dev = ["pytest>=8", "ruff>=0.8"]
+
+[project.scripts]
+alas3 = "alas3.cli:main"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.ruff]
+line-length = 110
+target-version = "py312"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "B", "UP"]
+ignore = ["E501"]  # line length is handled by `ruff format`; long SQL literals stay readable
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

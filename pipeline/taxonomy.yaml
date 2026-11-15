@@ -1,0 +1,42 @@
+# Rule-based classification (PLAN.md §4.5). Keywords are matched case- and
+# accent-insensitively, as whole words (plus plural -s/-es), against
+# "concepto + detalle + proveedor". First match wins, so order matters.
+# Rubros come from the administrator's liquidación; these are sub-categories.
+# Tuned on the administrator's monthly "Resumen de cuenta" format.
+subcategorias:
+  - name: Movilidad / taxi
+    tags: [encargado, movilidad/taxi]
+    keywords: [taxi, remis, uber, cabify, viatico, movilidad]
+  - name: Sueldos y cargas sociales
+    keywords: [sueldo, haberes, cargas sociales, costo laboral, suterh, fateryh, aguinaldo, sac, vacaciones]
+  - name: Limpieza
+    tags: [limpieza]
+    keywords: [limpieza, lavandina, detergente, trapo, bolsas de residuos]
+  - name: Ascensor
+    tags: [ascensor]
+    keywords: [ascensor, elevador]
+  - name: Pintura
+    tags: [pintura]
+    keywords: [pintura, pintureria, latex, esmalte]
+  - name: Electricidad
+    keywords: [epec, e.p.e.c, edesur, edenor, electricista, electricidad, lampara, sensor de movimiento]
+  - name: Agua y bombas
+    keywords: [aysa, aguas cordobesas, agua, tanque, bomba]
+  - name: Gas
+    keywords: [ecogas, metrogas, naturgy, gas]
+  - name: Seguridad y control de acceso
+    keywords: [cctv, monitoreo, control de acceso, camara, alarma]
+  - name: Jardinería
+    keywords: [jardineria, jardin, parquizacion]
+  - name: Teléfono e internet
+    keywords: [telefonico, telefono, internet]
+  - name: Administración central del complejo
+    keywords: [administracion central]
+  - name: Honorarios y gastos administrativos
+    keywords: [honorarios, fotocopias, sistema web, autogestion]
+  - name: Gastos bancarios
+    keywords: [bancarios, comision bancaria, ley 25413]
+  - name: Obras y mantenimiento
+    keywords: [mano de obra, membrana, impermeabilizacion, caños, plomero, cerrajero, reparacion, mantenimiento, ferreteria, pulsador, mechas]
+  - name: Seguros
+    keywords: [seguro, poliza]
