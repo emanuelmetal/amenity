@@ -25,8 +25,8 @@ KIND_MAP = {
 }
 
 # Document kinds processed and published in the current phase (PLAN.md §10).
-# Phase 2 adds "comprobantes", Phase 3 "acta". Anything else is never published.
-PHASE_KINDS = ("reglamento", "liquidacion")
+# Phase 3 adds "acta". Anything else is never published.
+PHASE_KINDS = ("reglamento", "liquidacion", "comprobantes")
 
 RENDER_DPI = 150
 WEBP_QUALITY = 70

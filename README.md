@@ -2,9 +2,12 @@
 
 A private, read-only website for the 64 units of Torre 3 (Alas III). Neighbours can read the building's rules and see where the expenses go. It has these sections:
 
-- Gastos: the expense lines of each monthly liquidación, by rubro and category.
+- Inicio: a dashboard with income vs expenses per month, spending by rubro, the main vendors, and how much of the spending has a receipt.
+- Gastos: the expense lines of each monthly liquidación, by rubro and category, each with the receipts that back it.
+- Comprobantes: the invoices, receipts and tickets the administrator handed over, linked to the expense lines.
+- Análisis: saved answers to common questions (taxis paid to the encargado, spending by rubro per year, expenses without a receipt).
 - Reglamento: the Reglamento Interno and the Reglamento de Copropiedad, article by article.
-- Buscar: full-text search across both.
+- Buscar: full-text search across all of it.
 - Page viewer: every figure links back to the scanned page it came from.
 
 There are no accounts. Access is by secret link. The UI is in Spanish (es-AR).
@@ -24,12 +27,13 @@ The pipeline fails closed:
 - Pages are restricted and never served or indexed when they are payroll slips, debt listings, scans without readable text, or pages where a personal ID couldn't be located for blacking out.
 - The "Unidades en mora" block of a liquidación is blacked out in the PDF and image and dropped from the text.
 - Personal CUIL, DNI and CBU numbers are masked in all published text and blacked out in the PDF and images. Company CUITs stay visible.
+- Every QR code on a receipt is blacked out after it is read: an invoice QR encodes the issuer's CUIT, which for monotributo vendors is a person's CUIL.
 - Only the redacted `public.pdf` and images rendered from it are uploaded. R2 is never public.
 
 To override a page by hand, edit `data/work/restrict.json`:
 
 ```json
-{"<sha16>": {"restrict": [3, 4], "allow": [7]}}
+{ "<sha16>": { "restrict": [3, 4], "allow": [7] } }
 ```
 
 then run `make ingest ARGS=--force` and publish again.
@@ -55,15 +59,23 @@ Open the printed `/acceso?k=…` link to log in. Without it every page shows "Pe
 
 ## Adding documents
 
-Put the PDFs in `data/inbox/`, either in a kind folder (`reglamento/`, `liquidaciones/`) or at the root, where the file name decides the kind. Then:
+Put the PDFs in `data/inbox/`, either in a kind folder (`reglamento/`, `liquidaciones/`, `comprobantes/`) or at the root, where the file name decides the kind. Then:
 
 ```sh
-make ingest          # OCR, extract, redact (cached by file hash)
-make validate        # check that expense lines add up to the liquidación total
+make ingest          # OCR, QR codes, extract, redact (cached by file hash)
+make validate        # expense lines add up to the total, and the account summary balances
+make match           # receipt coverage per month
+make review          # local page on http://127.0.0.1:8790 to check receipts and links
 make publish-local   # or `make publish` for the real site
 ```
 
-Phase 1 only publishes reglamentos and liquidaciones. When a document can't be parsed automatically, you can write its content as JSON in `data/work/extract/<sha16>.json`. It is checked against the same schemas.
+Reglamentos, liquidaciones and receipts are published; actas wait for phase 3. When a document can't be parsed automatically, you can write its content as JSON in `data/work/extract/<sha16>.json`. It is checked against the same schemas.
+
+### Receipts
+
+Electronic invoices are read from their ARCA QR code, so date, CUIT, number and total are exact. Everything else (vendor, description, items, and every field of a paper receipt) comes from a transcription in `data/work/extract/<sha16>.tickets.json`, written by reading the page images (Claude Code does it from the images) and checked in `make review`. `alas3 ingest` reports how many pages are still to transcribe.
+
+Receipts are matched to expense lines automatically: same amount, several receipts that add up to one line, or one receipt that covers several lines. Uncertain matches wait in `make review`, where you can also confirm, reject, or link any receipt to any line by hand. Decisions are saved in `data/work/review.json` and applied on the next publish.
 
 ## Access links
 
@@ -104,7 +116,7 @@ After that, publishing new documents only needs `make ingest validate publish`, 
 ## Layout
 
 ```
-pipeline/   Python pipeline (alas3/: ingest, ocr, extract, classify, validate, redact, publish, links)
+pipeline/   Python pipeline (alas3/: ingest, ocr, qr, extract, receipts, classify, match, validate, review, redact, publish, links)
 web/        Vite + React app and the Worker (server/worker.ts, auth.ts, api.ts)
 db/         D1 migrations, FTS rebuild, fake seed data
 design/     design notes and theme tokens
@@ -113,7 +125,7 @@ data/       git-ignored: inbox/, work/, out/
 
 ## Roadmap
 
-Phase 1 is done. Next: receipts with ARCA QR codes matched to expense lines (phase 2), asamblea minutes and comments (phase 3), and questions in plain Spanish (phase 4).
+Phases 1 and 2 are done: reglamento, liquidaciones, receipts matched to expense lines, and the dashboard. Next: asamblea minutes and comments (phase 3), then questions in plain Spanish (phase 4).
 
 ## License
 

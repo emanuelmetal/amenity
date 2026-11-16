@@ -9,6 +9,7 @@ dependencies = [
   "pillow>=11",
   "pyyaml>=6",
   "rapidfuzz>=3.10",
+  "opencv-python-headless>=5,<6",  # located-but-undecoded QRs verified on 5.x
 ]
 
 [dependency-groups]

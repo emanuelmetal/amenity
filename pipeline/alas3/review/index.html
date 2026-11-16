@@ -1,0 +1,320 @@
+<!doctype html>
+<html lang="es-AR">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Revisión · Torre 3</title>
+<link rel="icon" href="data:,">
+<style>
+  :root { --bg:#f7f7f8; --panel:#fff; --line:#e5e7eb; --text:#111827; --muted:#6b7280; --primary:#286cf0;
+          --ok:#16a34a; --bad:#dc2626; --warn:#d97706; }
+  * { box-sizing: border-box; }
+  body { margin:0; font:14px/1.45 system-ui, -apple-system, "Segoe UI", sans-serif; background:var(--bg); color:var(--text); }
+  header { position:sticky; top:0; z-index:5; background:var(--panel); border-bottom:1px solid var(--line); padding:12px 20px; display:flex; gap:16px; align-items:center; flex-wrap:wrap; }
+  header h1 { font-size:16px; margin:0 12px 0 0; }
+  nav button { border:1px solid var(--line); background:#fff; border-radius:8px; padding:6px 10px; cursor:pointer; font:inherit; }
+  nav button[aria-pressed=true] { border-color:var(--primary); color:var(--primary); font-weight:600; }
+  .hint { color:var(--muted); font-size:12px; margin-left:auto; }
+  main { max-width:1200px; margin:0 auto; padding:20px; display:grid; gap:14px; }
+  .card { background:var(--panel); border:1px solid var(--line); border-radius:12px; padding:14px; display:grid; gap:10px; }
+  .row { display:flex; gap:12px; align-items:flex-start; flex-wrap:wrap; }
+  .line { flex:1 1 320px; }
+  .amount { font-variant-numeric:tabular-nums; font-weight:600; white-space:nowrap; }
+  .muted { color:var(--muted); font-size:12px; }
+  .tickets { display:grid; gap:8px; grid-template-columns:repeat(auto-fill, minmax(260px, 1fr)); }
+  .ticket { border:1px solid var(--line); border-radius:10px; padding:8px; display:grid; gap:6px; }
+  .ticket.verified { border-color:var(--ok); } .ticket.rejected { border-color:var(--bad); opacity:.6; }
+  .thumbs { display:flex; gap:4px; overflow-x:auto; }
+  .thumbs img { height:120px; border:1px solid var(--line); border-radius:6px; cursor:zoom-in; background:#fafafa; }
+  .tag { display:inline-block; border-radius:999px; padding:1px 8px; font-size:12px; border:1px solid var(--line); }
+  .tag.pending { color:var(--warn); border-color:var(--warn); } .tag.auto { color:var(--primary); border-color:var(--primary); }
+  .tag.verified { color:var(--ok); border-color:var(--ok); } .tag.bank { color:var(--muted, #555); }
+  .tag[hidden] { display:none; }
+  button.act { border:1px solid var(--line); background:#fff; border-radius:8px; padding:5px 10px; cursor:pointer; font:inherit; }
+  button.ok { border-color:var(--ok); color:var(--ok); } button.bad { border-color:var(--bad); color:var(--bad); }
+  button.ok[aria-pressed=true] { background:var(--ok); color:#fff; } button.bad[aria-pressed=true] { background:var(--bad); color:#fff; }
+  label.f { display:grid; gap:2px; font-size:12px; color:var(--muted); }
+  label.f input.amount { text-align:right; font-variant-numeric:tabular-nums; }
+  label.f input, label.f select, label.f textarea { font:inherit; color:var(--text); border:1px solid var(--line); border-radius:6px; padding:4px 6px; }
+  .grid2 { display:grid; grid-template-columns:repeat(auto-fill, minmax(160px, 1fr)); gap:6px; }
+  dialog { border:none; border-radius:12px; padding:0; max-width:95vw; max-height:95vh; }
+  dialog img { display:block; max-width:95vw; max-height:90vh; }
+  .empty { color:var(--muted); text-align:center; padding:40px; }
+  #picker { width:min(1200px, 96vw); height:92vh; padding:0; display:none; flex-direction:column; }
+  #picker[open] { display:flex; }
+  #picker::backdrop, #zoom::backdrop { background:rgba(0,0,0,.6); }
+  .pickhead { display:flex; justify-content:space-between; gap:12px; align-items:flex-start; padding:14px 16px; border-bottom:1px solid var(--line); }
+  .pickfilters { display:flex; gap:12px; align-items:center; flex-wrap:wrap; padding:10px 16px; border-bottom:1px solid var(--line); }
+  .pickfilters input[type=search] { flex:1 1 320px; font:inherit; border:1px solid var(--line); border-radius:8px; padding:6px 8px; }
+  label.inline { display:inline-flex; gap:6px; align-items:center; font-size:13px; }
+  .pickgrid { flex:1; overflow-y:auto; padding:16px; display:grid; gap:12px; grid-template-columns:repeat(auto-fill, minmax(220px, 1fr)); align-content:start; }
+  .pickcard { border:1px solid var(--line); border-radius:10px; padding:8px; display:grid; gap:6px; align-content:start; background:#fff; }
+  .pickcard.linked { background:#fafafa; }
+  .pickcard > img { width:100%; height:240px; object-fit:cover; object-position:top; border:1px solid var(--line); border-radius:6px; cursor:zoom-in; }
+  .pickcard .thumbs img { height:56px; }
+  .noimg { height:240px; display:grid; place-items:center; color:var(--muted); background:#fafafa; border-radius:6px; }
+  .clamp { display:-webkit-box; -webkit-line-clamp:3; -webkit-box-orient:vertical; overflow:hidden; }
+  #toast { position:fixed; bottom:16px; right:16px; background:#111827; color:#fff; padding:8px 12px; border-radius:8px; display:none; }
+</style>
+</head>
+<body>
+<header>
+  <h1>Revisión de comprobantes</h1>
+  <nav id="tabs"></nav>
+  <span class="hint">Las decisiones se guardan en data/work/review.json. Para publicarlas: <code>make publish-local</code></span>
+</header>
+<main id="main"><div class="empty">Cargando…</div></main>
+<dialog id="picker"></dialog>
+<dialog id="zoom"><img alt=""></dialog>
+<div id="toast"></div>
+<script>
+const number2 = new Intl.NumberFormat("es-AR", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+// $34.567,58 (es-AR, no space after the sign)
+const fmt = (n) => (n == null || !Number.isFinite(Number(n)) ? "—" : (n < 0 ? "-$" : "$") + number2.format(Math.abs(n)));
+
+// Amount typed by a person -> number. Accepts "$34.567,58", "34567,58", "34567.58", "34.567".
+function parseMoney(text) {
+  let t = String(text).replace(/[$\s\u00a0]/g, "");
+  if (!t) return null;
+  if (t.includes(",")) t = t.replace(/\./g, "").replace(",", ".");
+  else if (!/^-?\d+\.\d{1,2}$/.test(t)) t = t.replace(/\./g, ""); // dots as thousands separators
+  const n = Number(t);
+  return Number.isFinite(n) ? n : NaN;
+}
+let data = null;
+let tab = "pending";
+const TABS = [
+  ["pending", "Para revisar"], ["receipts", "Comprobantes"], ["unmatched", "Gastos sin comprobante ni pago"],
+  ["unused", "Comprobantes sin gasto"], ["auto", "Vinculados"],
+];
+
+function el(tag, attrs = {}, ...kids) {
+  const e = document.createElement(tag);
+  for (const [k, v] of Object.entries(attrs)) {
+    if (k.startsWith("on")) e.addEventListener(k.slice(2), v);
+    else if (v !== false && v != null) e.setAttribute(k, v === true ? "" : v);
+  }
+  for (const k of kids.flat()) if (k != null) e.append(k.nodeType ? k : String(k));
+  return e;
+}
+
+async function load() {
+  const r = await fetch("/api/queue");
+  data = await r.json();
+  render();
+}
+
+async function act(body) {
+  const r = await fetch("/api/action", { method: "POST", headers: { "Content-Type": "application/json", "X-Review": "1" }, body: JSON.stringify(body) });
+  if (!r.ok) { toast("Error: " + (await r.text())); return; }
+  toast("Guardado");
+  await load();
+}
+
+function toast(msg) {
+  const t = document.getElementById("toast");
+  t.textContent = msg; t.style.display = "block";
+  clearTimeout(t._h); t._h = setTimeout(() => (t.style.display = "none"), 1500);
+}
+
+function thumbs(pages) {
+  if (!pages.length) return el("span", { class: "muted" }, "Sin imagen (página privada)");
+  return el("div", { class: "thumbs" }, pages.map((p) => {
+    const src = `/img/${p.doc}/${p.page}.webp`;
+    return el("img", { src, alt: `Página ${p.page}`, loading: "lazy", onclick: () => zoom(src) });
+  }));
+}
+
+function zoom(src) {
+  const d = document.getElementById("zoom");
+  d.querySelector("img").src = src;
+  d.showModal();
+}
+document.getElementById("zoom").addEventListener("click", (e) => e.currentTarget.close());
+
+function lineBlock(line) {
+  return el("div", { class: "line" },
+    el("div", { class: "muted" }, `${line.period} · ${line.rubro}`),
+    el("div", {}, el("strong", {}, line.concepto), line.detalle ? ` — ${line.detalle}` : ""),
+    el("div", { class: "amount" }, fmt(line.importe)));
+}
+
+// Decision on a line <-> receipt link, or line <-> bank payment (t.type === "payment").
+function linkBody(t, lineId, decision) {
+  return t.type === "payment"
+    ? { type: "payment", line_id: lineId, movement_id: t.id, decision }
+    : { type: "link", line_id: lineId, ticket_id: t.id, decision };
+}
+
+function ticketMini(t, group) {
+  const decision = group.decisions[t.id];
+  const card = el("div", { class: `ticket ${decision || ""}` },
+    el("div", {}, el("strong", {}, t.proveedor || "(sin proveedor)"), " ", el("span", { class: "amount" }, fmt(t.total))),
+    el("div", { class: "muted" }, [t.kind, t.letra, t.fecha].filter(Boolean).join(" · ")),
+    t.descripcion ? el("div", { class: "muted" }, t.descripcion) : null,
+    thumbs(t.pages),
+    el("div", { class: "row" },
+      el("button", { class: "act ok", "aria-pressed": decision === "verified", onclick: () => act(linkBody(t, group.line.id, decision === "verified" ? null : "verified")) }, "Confirmar"),
+      el("button", { class: "act bad", "aria-pressed": decision === "rejected", onclick: () => act(linkBody(t, group.line.id, decision === "rejected" ? null : "rejected")) }, "Rechazar")));
+  return card;
+}
+
+// Link any receipt (or bank payment) to a line by hand: a full-screen gallery with each
+// one's image; the line's month (and the one before) first, closest amount first.
+function prevPeriod(p) {
+  const [y, m] = p.split("-").map(Number);
+  return m === 1 ? `${y - 1}-12` : `${y}-${String(m - 1).padStart(2, "0")}`;
+}
+
+function openPicker(line, exclude) {
+  const dlg = document.getElementById("picker");
+  if (!data.all_receipts || !data.all_movements) { toast("Reiniciá make review: el servidor es de una versión anterior"); return; }
+  let source = "receipts";
+  const sourceBtns = [["receipts", "Comprobantes"], ["movements", "Movimientos bancarios"]].map(([k, label]) =>
+    el("button", { class: "act", "aria-pressed": k === source, onclick: (e) => {
+      source = k; sourceBtns.forEach((b) => b.setAttribute("aria-pressed", b === e.currentTarget)); draw(); } }, label));
+  const near = new Set([line.period, prevPeriod(line.period)]);
+  const q = el("input", { type: "search", placeholder: "Filtrar por proveedor, descripción, fecha o importe…" });
+  const onlyNear = el("input", { type: "checkbox", checked: true });
+  const grid = el("div", { class: "pickgrid" });
+  const count = el("span", { class: "muted" });
+  const norm = (x) => String(x ?? "").toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "");
+  const draw = () => {
+    const words = norm(q.value).split(/\s+/).filter(Boolean);
+    const receipts = source === "movements" ? data.all_movements : data.all_receipts;
+    const rows = receipts
+      .filter((t) => !exclude.includes(t.id))
+      .filter((t) => !onlyNear.checked || near.has(t.period))
+      .filter((t) => {
+        const hay = norm(`${t.proveedor} ${t.descripcion} ${t.fecha} ${t.kind} ${fmt(t.total)} ${t.total}`);
+        return words.every((w) => hay.includes(w));
+      })
+      .sort((a, b) => (near.has(b.period) - near.has(a.period)) || Math.abs(a.total - line.importe) - Math.abs(b.total - line.importe));
+    count.textContent = `${rows.length} ${source === "movements" ? "movimientos" : "comprobantes"}`;
+    grid.replaceChildren(...rows.map((t) => el("article", { class: `pickcard ${t.linked ? "linked" : ""}` },
+      t.pages.length
+        ? el("img", { src: `/img/${t.pages[0].doc}/${t.pages[0].page}.webp`, alt: `Comprobante ${t.proveedor ?? ""}`, loading: "lazy",
+            onclick: () => zoom(`/img/${t.pages[0].doc}/${t.pages[0].page}.webp`) })
+        : el("div", { class: "noimg" }, "Sin imagen"),
+      t.type !== "payment" && t.pages.length > 1 ? el("div", { class: "thumbs" }, t.pages.slice(1).map((p) => el("img", { src: `/img/${p.doc}/${p.page}.webp`, alt: `Página ${p.page}`, loading: "lazy", onclick: () => zoom(`/img/${p.doc}/${p.page}.webp`) }))) : null,
+      el("div", {}, el("strong", {}, t.proveedor || "(sin proveedor)")),
+      el("div", { class: "amount" }, fmt(t.total)),
+      el("div", { class: "muted" }, [t.kind, t.fecha ?? t.period, t.pages.length ? `pág. ${t.pages.map((p) => p.page).join(", ")}` : null].filter(Boolean).join(" · ")),
+      t.descripcion ? el("div", { class: "muted clamp" }, t.descripcion) : null,
+      t.linked ? el("span", { class: "tag auto" }, "Ya vinculado a otro gasto") : null,
+      el("button", { class: "act ok", onclick: async () => { dlg.close(); await act(linkBody(t, line.id, "verified")); } }, "Vincular a este gasto"))));
+    if (!rows.length) grid.replaceChildren(el("div", { class: "empty" }, source === "movements" && !data.all_movements.length
+      ? "No hay resúmenes bancarios cargados."
+      : "Nada coincide. Probá sin el filtro de período."));
+  };
+  q.addEventListener("input", draw);
+  onlyNear.addEventListener("change", draw);
+  dlg.replaceChildren(
+    el("div", { class: "pickhead" },
+      el("div", {},
+        el("div", { class: "muted" }, `Vincular comprobante o pago · ${line.period} · ${line.rubro}`),
+        el("div", {}, el("strong", {}, line.concepto), line.detalle ? ` — ${line.detalle}` : "", " ", el("span", { class: "amount" }, fmt(line.importe)))),
+      el("button", { class: "act", onclick: () => dlg.close() }, "Cerrar")),
+    el("div", { class: "pickfilters" }, ...sourceBtns, q, el("label", { class: "inline" }, onlyNear, " Solo de este período y el anterior"), count),
+    grid);
+  draw();
+  dlg.showModal();
+  q.focus();
+}
+
+function linkPicker(line, exclude = []) {
+  return el("div", { class: "pickwrap" }, el("button", { class: "act", onclick: () => openPicker(line, exclude) }, "Vincular comprobante o pago…"));
+}
+
+function groupCard(g) {
+  const sum = g.tickets.reduce((s, t) => s + (t.total || 0), 0);
+  const all = async () => { for (const t of g.tickets) await fetch("/api/action", { method: "POST", headers: { "Content-Type": "application/json", "X-Review": "1" }, body: JSON.stringify(linkBody(t, g.line.id, "verified")) }); toast("Guardado"); load(); };
+  return el("section", { class: "card" },
+    el("div", { class: "row" }, lineBlock(g.line),
+      el("div", {}, g.type === "payment" ? el("span", { class: "tag bank" }, "Pago bancario") : null, " ",
+        el("span", { class: `tag ${g.status}` }, { pending: "Para revisar", auto: "Automático", verified: "Confirmado" }[g.status]),
+        " ", el("span", { class: "muted" }, `${g.reason} · puntaje ${g.score.toFixed(2)}`),
+        g.tickets.length > 1 ? el("div", { class: "muted" }, `Suma de comprobantes: ${fmt(sum)}`) : null),
+      g.status !== "verified" ? el("button", { class: "act ok", onclick: all }, "Confirmar todos") : null),
+    el("div", { class: "tickets" }, g.tickets.map((t) => ticketMini(t, g))),
+    linkPicker(g.line, g.tickets.map((t) => t.id)));
+}
+
+// Unsaved edits survive the reload that follows any save (keyed by receipt id).
+const drafts = {};
+
+function receiptCard(t) {
+  const draft = drafts[t.id] || {};
+  const f = {};
+  const dirtyTag = el("span", { class: "tag pending", hidden: !drafts[t.id] }, "Cambios sin guardar");
+  const track = (name, node) => {
+    f[name] = node;
+    node.addEventListener("input", () => { (drafts[t.id] ||= {})[name] = node.value; dirtyTag.hidden = false; });
+    return node;
+  };
+  const value = (name) => (name in draft ? draft[name] : t[name] ?? "");
+  const input = (name, label, type = "text") =>
+    el("label", { class: "f" }, label, track(name, el("input", { type, value: value(name) })));
+  // Money field: shown as $34.567,58, reformatted when leaving the field.
+  const moneyInput = (name, label) => {
+    const raw = value(name);
+    const i = el("input", { type: "text", inputmode: "decimal", value: name in draft ? raw : fmt(raw === "" ? null : Number(raw)), class: "amount" });
+    i.addEventListener("blur", () => {
+      const n = parseMoney(i.value);
+      if (n != null && !Number.isNaN(n)) i.value = fmt(n);
+    });
+    return el("label", { class: "f" }, label, track(name, i));
+  };
+  const kinds = ["factura", "recibo", "presupuesto", "ticket", "servicio", "nota_credito", "nota_debito", "otro"];
+  const sel = track("kind", el("select", {}, kinds.map((k) => el("option", { value: k, selected: k === value("kind") }, k))));
+  const desc = track("descripcion", el("textarea", { rows: 2 }, value("descripcion")));
+  const save = async () => {
+    const fields = Object.fromEntries(Object.entries(f).map(([k, v]) => [k, v.value]));
+    const total = parseMoney(fields.total);
+    if (Number.isNaN(total)) { toast("Total inválido: usá por ejemplo $34.567,58"); return; }
+    fields.total = total;
+    delete drafts[t.id];
+    await act({ type: "edit", id: t.id, fields });
+  };
+  return el("section", { class: `card ${t.verified ? "verified" : ""}` },
+    el("div", { class: "row" },
+      el("div", { class: "line" }, thumbs(t.pages)),
+      el("div", { style: "flex:1 1 360px; display:grid; gap:6px" },
+        el("div", {}, el("span", { class: `tag ${t.verified ? "verified" : "pending"}` }, t.verified ? "Verificado" : "Sin verificar"),
+          " ", dirtyTag,
+          " ", el("span", { class: "muted" }, t.source === "qr" ? "Datos del QR de ARCA (exactos)" : `Transcripción · confianza ${t.confidence}`)),
+        el("div", { class: "grid2" }, input("proveedor", "Proveedor"), input("fecha", "Fecha (AAAA-MM-DD)"), moneyInput("total", "Total"),
+          el("label", { class: "f" }, "Tipo", sel)),
+        el("label", { class: "f" }, "Descripción", desc),
+        el("div", { class: "row" },
+          el("button", { class: "act", onclick: save }, "Guardar cambios"),
+          el("button", { class: "act ok", "aria-pressed": t.verified, onclick: () => act({ type: "ticket", id: t.id, verified: !t.verified }) }, t.verified ? "Verificado ✓" : "Marcar verificado")))));
+}
+
+function render() {
+  const counts = {
+    pending: data.groups.filter((g) => g.status === "pending").length,
+    receipts: data.receipts.filter((t) => !t.verified).length,
+    unmatched: data.unmatched_lines.length,
+    unused: data.unused_receipts.length,
+    auto: data.groups.filter((g) => g.status !== "pending").length,
+  };
+  const nav = document.getElementById("tabs");
+  nav.replaceChildren(...TABS.map(([k, label]) => el("button", { "aria-pressed": tab === k, onclick: () => { tab = k; render(); } }, `${label} (${counts[k]})`)));
+  const main = document.getElementById("main");
+  let items = [];
+  if (tab === "pending") items = data.groups.filter((g) => g.status === "pending").map(groupCard);
+  if (tab === "auto") items = data.groups.filter((g) => g.status !== "pending").map(groupCard);
+  if (tab === "receipts") items = data.receipts.map(receiptCard);
+  if (tab === "unused") items = data.unused_receipts.map(receiptCard);
+  if (tab === "unmatched") items = data.unmatched_lines.map((l) => el("section", { class: "card" },
+    el("div", { class: "row" }, lineBlock(l), el("span", { class: "muted" }, "Ningún comprobante ni pago bancario del período coincide con este importe.")),
+    linkPicker(l)));
+  main.replaceChildren(...(items.length ? items : [el("div", { class: "empty" }, "Nada pendiente acá.")]));
+}
+
+window.addEventListener("beforeunload", (e) => { if (Object.keys(drafts).length) e.preventDefault(); });
+load();
+</script>
+</body>
+</html>

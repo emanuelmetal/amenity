@@ -8,6 +8,10 @@ Output per document in data/work/docs/<sha16>/:
                    debt blocks and personal identifiers blacked out (text and pixels),
                    metadata removed
   pNNN.webp        page renders, made from public.pdf (so they carry the same redactions)
+  raw/qr.json      receipts only: decoded QR payloads per page (unredacted, never published);
+                   every QR and 1D barcode found is blacked out in public.pdf (invoice
+                   QRs and old AFIP barcodes encode the issuer's CUIT, a person's CUIL
+                   for monotributo vendors)
 
 Manual overrides (human review): data/work/restrict.json
   {"<sha16>": {"restrict": [3, 4], "allow": [7]}}
@@ -25,7 +29,7 @@ from pathlib import Path
 import pymupdf
 from pydantic import BaseModel, ConfigDict, TypeAdapter, ValidationError
 
-from . import ocr, redact
+from . import ocr, qr, redact
 from .config import INBOX, KIND_MAP, MIN_TEXT_CHARS, PHASE_KINDS, RENDER_DPI, WEBP_QUALITY, WORK
 from .schemas import DocumentManifest, PageRecord
 
@@ -222,6 +226,7 @@ def ingest_file(path: Path, kind: str, force: bool = False) -> DocumentManifest:
     ov = load_overrides().get(manifest.work_dir_name, _Override())
     plans: list[tuple[PageRecord, list[pymupdf.Rect]]] = []
     carry = False  # a debt block that continues from the previous page
+    qr_payloads: dict[int, list[str]] = {}
     with pymupdf.open(src) as doc:
         for i, page in enumerate(doc):
             page_no = i + 1
@@ -238,7 +243,9 @@ def ingest_file(path: Path, kind: str, force: bool = False) -> DocumentManifest:
                 policy_rows += pixel_text.split("\n")
 
             policy = redact.page_policy(policy_rows, scanned=i in scanned, carry_in=carry)
-            carry = policy.open_block
+            # Only a liquidación's debt list runs across pages; a receipts bundle is many
+            # unrelated documents, so a block never continues onto the next page there.
+            carry = policy.open_block and kind == "liquidacion"
             reason = policy.restricted
             if reason is None and unchecked_image:
                 reason = "no_text"
@@ -263,6 +270,17 @@ def ingest_file(path: Path, kind: str, force: bool = False) -> DocumentManifest:
                     reason = "unlocated_identifier"  # masked in text but cannot be blacked out in the image
                 rects += hits
 
+            has_qr = False
+            if kind == "comprobantes":
+                found = qr.find_qr(page)
+                has_qr = bool(found)
+                rects += [f.rect for f in found] + qr.find_barcodes(page)
+                qr_payloads[page_no] = [f.payload for f in found if f.payload]
+                if not found and reason is None and qr.ARCA_MARKERS.search("\n".join(policy_rows)):
+                    # An electronic invoice without a located QR: its QR (a CUIT) may still be on the image.
+                    print(f"  ! {path.name} p.{page_no}: mentions a CAE but no QR was found; check the image "
+                          "(add the page to restrict.json if a QR is visible)")
+
             if page_no in ov.restrict:
                 reason = "manual"
             elif page_no in ov.allow:
@@ -274,6 +292,7 @@ def ingest_file(path: Path, kind: str, force: bool = False) -> DocumentManifest:
                 ocr_engine="none"
                 if not any(row_texts)
                 else ("tesseract" if i in scanned or mixed else "pdf-text"),
+                has_qr=has_qr,
                 restricted=reason is not None,
                 restricted_reason=reason,
                 hidden_lines=len(policy.hidden_lines),
@@ -282,6 +301,8 @@ def ingest_file(path: Path, kind: str, force: bool = False) -> DocumentManifest:
             manifest.pages.append(rec)
             plans.append((rec, rects))
 
+    if kind == "comprobantes":
+        (out / "raw" / "qr.json").write_text(json.dumps(qr_payloads, indent=1))
     manifest.period = guess_period(path.name, (out / "raw" / "p001.txt").read_text())
     manifest.title = _title(kind, manifest.period, path)
 
@@ -312,7 +333,13 @@ def ingest_all(force: bool = False) -> list[DocumentManifest]:
     manifests = []
     files = inbox_files()
     load_overrides({sha256_file(p)[:16] for p, _ in files})  # validate before doing any work
+    seen: set[str] = set()
     for path, kind in files:
+        sha = sha256_file(path)
+        if sha in seen:
+            print(f"  skip {kind:12} {path.name} (same content as a file already listed)")
+            continue
+        seen.add(sha)
         if kind not in PHASE_KINDS:
             print(f"  skip {kind:12} {path.name} (not in this phase)")
             continue

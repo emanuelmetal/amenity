@@ -1,5 +1,5 @@
 # Torre 3 portal. See CLAUDE.md. LOCAL=1 targets local wrangler state.
-.PHONY: setup migrate migrate-local seed-local ingest validate publish publish-local build dev deploy \
+.PHONY: setup migrate migrate-local seed-local ingest validate review match publish publish-local build dev deploy \
         new-link rotate-link admin-link unit-link revoke-link list-links backup test test-py test-web
 
 PY := cd pipeline && uv run alas3
@@ -23,6 +23,10 @@ ingest:
 	$(PY) ingest $(ARGS)
 validate:
 	$(PY) validate
+review:
+	$(PY) review
+match:
+	$(PY) match
 publish:
 	$(PY) publish
 publish-local:

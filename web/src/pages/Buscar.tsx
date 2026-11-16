@@ -1,5 +1,5 @@
 import { useQuery } from "@tanstack/react-query";
-import { BookOpen, FileText, Receipt } from "lucide-react";
+import { BookOpen, FileText, Paperclip, Receipt } from "lucide-react";
 import { useEffect, useState, type FormEvent } from "react";
 import { Link, useSearchParams } from "react-router";
 import { Button, Card, Empty, ErrorBox, Input, Loading, PageHeader, Snippet } from "../components/ui";
@@ -8,11 +8,12 @@ import { api, type SearchHit } from "../lib/api";
 function hitLink(h: SearchHit): string {
   if (h.entity_type === "article") return `/reglamento/${h.entity_id}`;
   if (h.entity_type === "expense") return `/gastos?q=${encodeURIComponent(h.title)}`;
+  if (h.entity_type === "ticket") return `/comprobantes?id=${h.entity_id}`;
   return h.page_id ? `/paginas/${h.page_id}` : "#";
 }
 
-const ICON = { article: <BookOpen size={16} />, expense: <Receipt size={16} />, page: <FileText size={16} />, acta_item: <FileText size={16} /> };
-const KIND = { article: "Reglamento", expense: "Gasto", page: "Documento", acta_item: "Acta" };
+const ICON = { article: <BookOpen size={16} />, expense: <Receipt size={16} />, ticket: <Paperclip size={16} />, page: <FileText size={16} />, acta_item: <FileText size={16} /> };
+const KIND = { article: "Reglamento", expense: "Gasto", ticket: "Comprobante", page: "Documento", acta_item: "Acta" };
 
 export default function Buscar() {
   const [params, setParams] = useSearchParams();

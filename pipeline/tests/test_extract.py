@@ -2,7 +2,7 @@ from alas3 import liquidacion
 from alas3.classify import classify_text
 from alas3.extract import parse_reglamento
 from alas3.schemas import Liquidacion, LiquidacionLine, RubroTotal
-from alas3.validate import check_liquidacion
+from alas3.validate import check_liquidacion, check_resumen
 
 
 def test_reglamento_articles_split_across_pages():
@@ -28,6 +28,32 @@ def test_reglamento_articles_split_across_pages():
     assert a3.titulo == "De las cocheras"
     assert a3.page_nos == [2, 3]
     assert [a.orden for a in reg.articles] == [1, 2, 3, 4]
+
+
+def test_liquidacion_summary_block_before_detail_is_ignored():
+    # Since 07/2026 the page opens with an upper-case header and an income summary
+    # before "DETALLE DE LOS GASTOS"; none of it may become an expense line.
+    text = "\n".join(
+        [
+            "EDIFICIO DE PRUEBA, ADMINISTRACION DE CONSORCIOS",
+            "Concepto Ingreso / Egreso  Ingreso  Egreso",
+            "Saldo Inicial del Período 10/2026  5.000.000,00",
+            "EXPENSAS COMUNES  4.000.000,00",
+            "Total de Gastos del Mes  1.100.000,00",
+            "Saldo Final del Período 10/2026  7.900.000,00",
+            "DETALLE DE LOS GASTOS AL MES: OCTUBRE DE 2026",
+            "Concepto Gastos  Detalle Gastos  Gastos",
+            "SUELDOS Y JORNALES",
+            "SUELDO ENCARGADO  mes 10/2026  1,000,000.00",
+            "SERVICIOS Y SERVICES",
+            "SERVICIO DE JARDINERIA  mes 10/2026  100,000.00",
+            "Total de Gastos del Período: 10/2026  1,100,000.00",
+        ]
+    )
+    liq = liquidacion.parse("2026-10", [(1, text)])
+    assert [ln.concepto for ln in liq.lines] == ["SUELDO ENCARGADO", "SERVICIO DE JARDINERIA"]
+    assert liq.total == 1_100_000.0
+    assert check_liquidacion(liq) == []
 
 
 def test_liquidacion_parser_and_validation():
@@ -86,3 +112,42 @@ def test_classify_whole_words():
     assert classify_text("Gastos bancarios varios")[0] != "Gas"
     assert classify_text("MetroGas factura")[0] == "Gas"
     assert classify_text("Ascensores Sur SRL")[0] == "Ascensor"
+
+
+SUMMARY = [
+    "Concepto Ingreso / Egreso  Ingreso  Egreso",
+    "Saldo Inicial del Período 10/2026  1.000.000,00",
+    "EXPENSAS COMUNES  2.000.000,00",
+    "PUNITORIOS MENSUALES  50.000,00",
+    "pasado a fondo de obra  300.000,00",
+    "Total de Gastos del Mes  1.100.000,00",
+    "Saldo Final del Período 10/2026  1.650.000,00",
+    "INGRESOS PERÍODO: 2.050.000,00  EGRESOS PERÍODO: 1.400.000,00  SALDO DEL PERÍODO: 650.000,00",
+    "DETALLE DE LOS GASTOS AL MES: OCTUBRE DE 2026",
+    "SUELDOS Y JORNALES",
+    "SUELDO ENCARGADO  mes 10/2026  1,100,000.00",
+    "Total de Gastos del Período: 10/2026  1,100,000.00",
+]
+
+
+def test_resumen_parsed_and_outflows_found_from_period_totals():
+    liq = liquidacion.parse("2026-10", [(1, "\n".join(SUMMARY))])
+    r = liq.resumen
+    assert (r.saldo_inicial, r.saldo_final, r.ingresos, r.egresos) == (
+        1_000_000,
+        1_650_000,
+        2_050_000,
+        1_400_000,
+    )
+    assert [(i.concepto, i.tipo) for i in r.items] == [
+        ("EXPENSAS COMUNES", "ingreso"),
+        ("PUNITORIOS MENSUALES", "ingreso"),
+        ("pasado a fondo de obra", "egreso"),  # the column is lost in text; the totals tell
+    ]
+    assert check_liquidacion(liq) == [] and check_resumen(liq) == []
+
+
+def test_resumen_balance_mismatch_is_reported():
+    bad = [ln.replace("1.650.000,00", "1.600.000,00") for ln in SUMMARY]
+    liq = liquidacion.parse("2026-10", [(1, "\n".join(bad))])
+    assert any("saldo final" in p for p in check_resumen(liq))

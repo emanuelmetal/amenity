@@ -22,7 +22,9 @@ from __future__ import annotations
 import re
 
 from .redact import _DEBT_START
-from .schemas import Liquidacion, LiquidacionLine, RubroTotal
+from .schemas import Liquidacion, LiquidacionLine, Resumen, ResumenItem, RubroTotal
+
+TOLERANCE = 0.01
 
 # 1.234,56 (AR) or 1,234.56 (US), optional sign/$ /parentheses.
 AMOUNT = r"-?\$?\s?\(?-?(?:\d{1,3}(?:[.,]\d{3})+|\d+)[.,]\d{2}\)?"
@@ -58,12 +60,81 @@ def _is_rubro_header(line: str) -> bool:
     return len(letters) >= 4 and sum(c.isupper() for c in letters) / len(letters) > 0.9
 
 
+_SUMMARY_HEADER = re.compile(r"(?i)^\s*concepto\s+ingreso\s*/\s*egreso")
+_SALDO_INICIAL = re.compile(r"(?i)^\s*saldo\s+inicial\b")
+_SALDO_FINAL = re.compile(r"(?i)^\s*saldo\s+final\b")
+_PERIOD_TOTALS = re.compile(rf"(?i)\b(?P<kind>INGRESOS|EGRESOS)\s+PER[IÍ]ODO\s*:\s*(?P<amount>{AMOUNT})")
+
+
+def _split_egresos(items: list[tuple[str, float]], ingresos: float | None) -> set[int]:
+    """Indexes of the summary items that are outflows.
+
+    The text layer loses the Ingreso/Egreso column, but the block states the period's
+    total income: the items that make up the difference are the outflows (e.g.
+    "pasado a fondo de obra", "Gastos Cobranza"). Smallest such subset wins.
+    """
+    from itertools import combinations
+
+    if ingresos is None:
+        return set()
+    excess = round(sum(a for _, a in items) - ingresos, 2)
+    if abs(excess) <= TOLERANCE:
+        return set()
+    for k in range(1, min(len(items), 6) + 1):
+        for combo in combinations(range(len(items)), k):
+            if abs(sum(items[i][1] for i in combo) - excess) <= TOLERANCE:
+                return set(combo)
+    return set()  # unresolved: validate.check_resumen reports it
+
+
+def parse_resumen(pages: list[tuple[int, str]]) -> Resumen | None:
+    """The "Resumen de cuenta" block above the expense detail."""
+    res = Resumen()
+    items: list[tuple[str, float]] = []
+    in_block = False
+    for _, text in pages:
+        for raw in text.splitlines():
+            if _DETAIL_START.search(raw):
+                break
+            for m in _PERIOD_TOTALS.finditer(raw):
+                v = parse_amount(m.group("amount"))
+                if m.group("kind").upper() == "INGRESOS":
+                    res.ingresos = v
+                else:
+                    res.egresos = v
+            if _SUMMARY_HEADER.match(raw):
+                in_block = True
+                continue
+            am = _AMOUNT_AT_END.match(raw)
+            if not in_block or not am:
+                continue
+            label, amount = am.group("text").strip(), parse_amount(am.group("amount"))
+            if _SALDO_INICIAL.match(label):
+                res.saldo_inicial = amount
+            elif _SALDO_FINAL.match(label):
+                res.saldo_final = amount
+                in_block = False
+            elif not _GRAND_TOTAL.match(label):  # "Total de Gastos del Mes" = the detail's total
+                items.append((label, amount))
+        else:
+            continue
+        break  # reached the detail
+    if res.saldo_inicial is None and res.ingresos is None and not items:
+        return None
+    egresos = _split_egresos(items, res.ingresos)
+    res.items = [
+        ResumenItem(concepto=c, importe=a, tipo="egreso" if i in egresos else "ingreso")
+        for i, (c, a) in enumerate(items)
+    ]
+    return res
+
+
 def parse(period: str, pages: list[tuple[int, str]]) -> Liquidacion:
     lines: list[LiquidacionLine] = []
     rubro_totals: list[RubroTotal] = []
     total: float | None = None
     rubro: str | None = None
-    has_detail_marker = any(_DETAIL_START.search(t) for _, t in pages)
+    has_detail_marker = any(_DETAIL_START.search(ln) for _, t in pages for ln in t.splitlines())
     in_detail = not has_detail_marker  # generic layout: the whole document is detail
 
     for page_no, text in pages:
@@ -117,4 +188,6 @@ def parse(period: str, pages: list[tuple[int, str]]) -> Liquidacion:
                     confidence=0.8,
                 )
             )
-    return Liquidacion(period=period, total=total, rubro_totals=rubro_totals, lines=lines)
+    return Liquidacion(
+        period=period, total=total, rubro_totals=rubro_totals, lines=lines, resumen=parse_resumen(pages)
+    )

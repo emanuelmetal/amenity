@@ -5,9 +5,9 @@ Order matters for privacy:
    and the WebP of every non-restricted page. Uploads are tracked by content
    hash in data/work/uploaded-<target>.json, so a re-ingest that changes
    redactions re-uploads (overwrites) the file.
-2. Apply data/out/publish.sql to D1: upserts for documents/pages/periods,
-   full replace of each period's lines and each reglamento's articles, FTS
-   rebuild. Every published string goes through redact.redact_text.
+2. Apply data/out/publish.sql to D1: upserts for documents/pages/periods and
+   expense lines (stable ids, see ids.py), full replace of each reglamento's
+   articles, sweep of anything no longer published, FTS rebuild. Every published string goes through redact.redact_text.
 3. Delete from R2 the renders of pages that are now restricted.
 
 Only document kinds in config.PHASE_KINDS are ever published.
@@ -20,11 +20,14 @@ import json
 from pathlib import Path
 
 from . import wrangler
+from .classify import classify_text
 from .config import OUT, PHASE_KINDS, REPO, WORK
 from .extract import load_extract
+from .ids import expense_line_ids, movement_ids, ticket_ids
 from .ingest import doc_dir, load_manifests
+from .match import collect, collect_movements, match, match_payments
 from .redact import redact_text
-from .schemas import DocumentManifest, Liquidacion, Reglamento
+from .schemas import Comprobantes, DocumentManifest, Liquidacion, Reglamento, ReviewState
 
 
 def q(v: object) -> str:
@@ -63,7 +66,10 @@ def publishable(manifests: list[DocumentManifest]) -> list[DocumentManifest]:
     return [m for m in manifests if m.kind in PHASE_KINDS]
 
 
-def build_sql(manifests: list[DocumentManifest]) -> str:
+def build_sql(manifests: list[DocumentManifest], review: ReviewState | None = None) -> str:
+    """`review`: human decisions from review.json (verified lines/receipts, link decisions)."""
+    review = review or ReviewState()
+    verified_lines = set(review.lines_verified)
     stmts: list[str] = []
     for m in publishable(manifests):
         stmts.append(
@@ -83,22 +89,42 @@ def build_sql(manifests: list[DocumentManifest]) -> str:
 
         ext = load_extract(m)
         if isinstance(ext, Liquidacion):
-            stmts.append(
-                f"INSERT INTO periods (id, total, document_id) VALUES ({q(ext.period)}, {q(ext.total)}, {m.id}) "
-                "ON CONFLICT(id) DO UPDATE SET total=excluded.total, document_id=excluded.document_id;"
+            r = ext.resumen
+            resumen_json = json.dumps(
+                [{"concepto": redact_text(i.concepto), "importe": i.importe, "tipo": i.tipo} for i in r.items]
+                if r
+                else [],
+                ensure_ascii=False,
             )
-            # Phase 1: replace the period's lines wholesale. Phase 2 (ticket links +
-            # review) must switch to stable ids so verified flags and links survive.
-            stmts.append(f"DELETE FROM expense_lines WHERE period_id = {q(ext.period)};")
-            for ln in ext.lines:
+            stmts.append(
+                "INSERT INTO periods (id, total, document_id, saldo_inicial, saldo_final, ingresos, egresos, resumen_json) "
+                f"VALUES ({q(ext.period)}, {q(ext.total)}, {m.id}, {q(r and r.saldo_inicial)}, {q(r and r.saldo_final)}, "
+                f"{q(r and r.ingresos)}, {q(r and r.egresos)}, {q(resumen_json)}) "
+                "ON CONFLICT(id) DO UPDATE SET total=excluded.total, document_id=excluded.document_id, "
+                "saldo_inicial=excluded.saldo_inicial, saldo_final=excluded.saldo_final, ingresos=excluded.ingresos, "
+                "egresos=excluded.egresos, resumen_json=excluded.resumen_json;"
+            )
+            # Stable ids (ids.py): upsert, then drop the lines that disappeared, so links
+            # and review decisions on unchanged lines survive a re-ingest.
+            line_ids = expense_line_ids(ext)
+            for lid, ln in zip(line_ids, ext.lines, strict=True):
                 page_id = m.page_id(ln.page_no) if ln.page_no else None
+                verified = ln.verified or lid in verified_lines
                 stmts.append(
-                    "INSERT INTO expense_lines (period_id, rubro, subcategoria, concepto, detalle, proveedor, cuit, "
+                    "INSERT INTO expense_lines (id, period_id, rubro, subcategoria, concepto, detalle, proveedor, cuit, "
                     "importe, page_id, confidence, verified) VALUES "
-                    f"({q(ext.period)}, {qr(ln.rubro)}, {qr(ln.subcategoria)}, {qr(ln.concepto)}, {qr(ln.detalle)}, "
+                    f"({lid}, {q(ext.period)}, {qr(ln.rubro)}, {qr(ln.subcategoria)}, {qr(ln.concepto)}, {qr(ln.detalle)}, "
                     f"{qr(ln.proveedor)}, {qr(ln.cuit)}, {q(ln.importe)}, {q(page_id)}, {q(ln.confidence)}, "
-                    f"{q(ln.verified)});"
+                    f"{q(verified)}) "
+                    "ON CONFLICT(id) DO UPDATE SET period_id=excluded.period_id, rubro=excluded.rubro, "
+                    "subcategoria=excluded.subcategoria, concepto=excluded.concepto, detalle=excluded.detalle, "
+                    "proveedor=excluded.proveedor, cuit=excluded.cuit, importe=excluded.importe, page_id=excluded.page_id, "
+                    "confidence=excluded.confidence, verified=excluded.verified;"
                 )
+            stmts.append(
+                f"DELETE FROM expense_lines WHERE period_id = {q(ext.period)} "
+                f"AND id NOT IN ({','.join(map(str, line_ids)) or 'NULL'});"
+            )
         elif isinstance(ext, Reglamento):
             stmts.append(f"DELETE FROM reglamento_articles WHERE document_id = {m.id};")
             for a in ext.articles:
@@ -109,6 +135,8 @@ def build_sql(manifests: list[DocumentManifest]) -> str:
                     f"({m.id}, {qr(a.numero)}, {a.orden}, {qr(a.titulo)}, {qr(a.texto)}, "
                     f"{q(json.dumps(page_ids))}, {q(a.verified)});"
                 )
+    stmts += _receipts_sql(publishable(manifests), review)
+
     # Sweep: anything published before that is not in the current set goes away.
     ids = ",".join(str(m.id) for m in publishable(manifests)) or "NULL"
     stmts += [
@@ -120,6 +148,105 @@ def build_sql(manifests: list[DocumentManifest]) -> str:
     ]
     stmts.append((REPO / "db" / "rebuild_fts.sql").read_text())
     return "\n".join(stmts) + "\n"
+
+
+def _receipts_sql(manifests: list[DocumentManifest], review: ReviewState) -> list[str]:
+    """Receipts (tickets + items), expense<->receipt links and tags."""
+    stmts: list[str] = []
+    all_ids: list[int] = []
+    for m in manifests:
+        ext = load_extract(m)
+        if not isinstance(ext, Comprobantes):
+            continue
+        restricted = {p.page_no for p in m.pages if p.restricted}
+        for tid, t in zip(ticket_ids(m.work_dir_name, ext.tickets), ext.tickets, strict=True):
+            page_ids = [m.page_id(n) for n in t.page_nos if n not in restricted]
+            if not page_ids:
+                continue  # read from private pages only: never published
+            all_ids.append(tid)
+            verified = t.verified or tid in review.tickets_verified
+            stmts.append(
+                "INSERT INTO tickets (id, document_id, page_id, page_ids_json, kind, letra, fecha, proveedor, cuit, "
+                "tipo_cmp, pto_vta, nro_cmp, cae, total, medio_pago, descripcion, period_id, subcategoria, source, "
+                "confidence, verified) VALUES "
+                f"({tid}, {m.id}, {page_ids[0]}, {q(json.dumps(page_ids))}, {q(t.kind)}, {q(t.letra)}, {q(t.fecha)}, "
+                f"{qr(t.proveedor)}, {qr(t.cuit)}, {q(t.tipo_cmp)}, {q(t.pto_vta)}, {q(t.nro_cmp)}, {q(t.cae)}, "
+                f"{q(t.total)}, {qr(t.medio_pago)}, {qr(t.descripcion)}, {q(t.period)}, {q(t.subcategoria)}, "
+                f"{q(t.source)}, {q(t.confidence)}, {q(verified)}) "
+                "ON CONFLICT(id) DO UPDATE SET document_id=excluded.document_id, page_id=excluded.page_id, "
+                "page_ids_json=excluded.page_ids_json, kind=excluded.kind, letra=excluded.letra, fecha=excluded.fecha, "
+                "proveedor=excluded.proveedor, cuit=excluded.cuit, tipo_cmp=excluded.tipo_cmp, pto_vta=excluded.pto_vta, "
+                "nro_cmp=excluded.nro_cmp, cae=excluded.cae, total=excluded.total, medio_pago=excluded.medio_pago, "
+                "descripcion=excluded.descripcion, period_id=excluded.period_id, subcategoria=excluded.subcategoria, "
+                "source=excluded.source, confidence=excluded.confidence, verified=excluded.verified;"
+            )
+            stmts.append(f"DELETE FROM ticket_items WHERE ticket_id = {tid};")
+            for it in t.items:
+                stmts.append(
+                    "INSERT INTO ticket_items (ticket_id, descripcion, cantidad, importe) VALUES "
+                    f"({tid}, {qr(it.descripcion)}, {q(it.cantidad)}, {q(it.importe)});"
+                )
+    stmts.append(f"DELETE FROM tickets WHERE id NOT IN ({','.join(map(str, all_ids)) or 'NULL'});")
+
+    # Links are recomputed on every publish; review decisions are inputs to match().
+    lines, tickets, lookup = collect(manifests)
+    published = set(all_ids)
+    stmts.append("DELETE FROM expense_ticket_links;")
+    for ln in match(lines, [t for t in tickets if t.id in published], review):
+        # 'pending' links are stored as 'auto' with their score: the site labels low scores.
+        status = "verified" if ln.status == "verified" else "auto"
+        stmts.append(
+            f"INSERT INTO expense_ticket_links VALUES ({ln.line_id}, {ln.ticket_id}, {ln.score}, {q(status)});"
+        )
+
+    stmts += _bank_sql(manifests, lines, review)
+
+    # Tags (taxonomy.yaml) on lines and receipts.
+    stmts.append("DELETE FROM entity_tags;")
+    tagged: list[tuple[str, int, str]] = []
+    for lid, (_, line) in lookup["lines"].items():
+        _, tags = classify_text(f"{line.concepto} {line.detalle or ''} {line.proveedor or ''}")
+        tagged += [("expense", lid, tag) for tag in tags]
+    for tid, (_, t) in lookup["tickets"].items():
+        if tid in published:
+            tagged += [("ticket", tid, tag) for tag in t.tags]
+    for name in sorted({tag for _, _, tag in tagged}):
+        stmts.append(f"INSERT OR IGNORE INTO tags (name) VALUES ({q(name)});")
+    for etype, eid, tag in tagged:
+        stmts.append(
+            "INSERT OR IGNORE INTO entity_tags (entity_type, entity_id, tag_id) "
+            f"SELECT {q(etype)}, {eid}, id FROM tags WHERE name = {q(tag)};"
+        )
+    return stmts
+
+
+def _bank_sql(manifests: list[DocumentManifest], lines: list, review: ReviewState) -> list[str]:
+    """Bank debits (payment evidence) and their links to expense lines, rebuilt on every publish."""
+    stmts = ["DELETE FROM expense_payment_links;", "DELETE FROM bank_movements;"]
+    for m in manifests:
+        ext = load_extract(m)
+        if not isinstance(ext, Comprobantes):
+            continue
+        restricted = {p.page_no for p in m.pages if p.restricted}
+        for st in ext.bank:
+            for mid, mv in zip(movement_ids(m.work_dir_name, st.movements), st.movements, strict=True):
+                page_ids = [m.page_id(n) for n in mv.page_nos if n not in restricted]
+                items = [{"descripcion": redact_text(i.descripcion), "importe": i.importe, "cantidad": i.cantidad}
+                         for i in mv.items]  # fmt: skip
+                stmts.append(
+                    "INSERT INTO bank_movements (id, document_id, page_id, page_ids_json, period_id, fecha, banco, "
+                    "comprobante, codigo, descripcion, importe, kind, items_json) VALUES "
+                    f"({mid}, {m.id}, {q(page_ids[0] if page_ids else None)}, {q(json.dumps(page_ids))}, "
+                    f"{q(mv.period)}, {q(mv.fecha)}, {qr(st.banco)}, {q(mv.comprobante)}, {q(mv.codigo)}, "
+                    f"{qr(mv.descripcion)}, {q(mv.importe)}, {q(mv.kind)}, {q(json.dumps(items, ensure_ascii=False))});"
+                )
+    movements, _ = collect_movements(manifests)
+    for ln in match_payments(lines, movements, review):
+        status = "verified" if ln.status == "verified" else "auto"
+        stmts.append(
+            f"INSERT INTO expense_payment_links VALUES ({ln.line_id}, {ln.ticket_id}, {ln.score}, {q(status)});"
+        )
+    return stmts
 
 
 def _sha(path: Path) -> str:
@@ -162,7 +289,9 @@ def publish(local: bool) -> None:
     # 2. database
     OUT.mkdir(parents=True, exist_ok=True)
     sql_path = OUT / "publish.sql"
-    sql_path.write_text(build_sql(manifests))
+    from .review import load_review
+
+    sql_path.write_text(build_sql(manifests, load_review()))
     wrangler.d1_file(sql_path, local)
 
     # 3. everything uploaded before that is no longer published (restricted pages, dropped documents)

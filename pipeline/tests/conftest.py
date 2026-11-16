@@ -16,7 +16,14 @@ def data_dir(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     import alas3.config as config
 
     importlib.reload(config)
-    for mod in ("alas3.ingest", "alas3.extract", "alas3.publish"):
+    for mod in (
+        "alas3.ingest",
+        "alas3.receipts",
+        "alas3.extract",
+        "alas3.review",
+        "alas3.match",
+        "alas3.publish",
+    ):
         importlib.reload(importlib.import_module(mod))
     for folder in config.KIND_MAP:
         (tmp_path / "inbox" / folder).mkdir(parents=True)

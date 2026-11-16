@@ -12,7 +12,7 @@ def cmd_ingest(args: argparse.Namespace) -> int:
     from .classify import classify_liquidacion
     from .extract import extract_document
     from .ingest import doc_dir, ingest_all
-    from .schemas import Liquidacion
+    from .schemas import Comprobantes, Liquidacion
 
     print("Ingest:")
     manifests = ingest_all(force=args.force)
@@ -27,6 +27,12 @@ def cmd_ingest(args: argparse.Namespace) -> int:
             classify_liquidacion(result)
             (doc_dir(m) / "extract.json").write_text(result.model_dump_json(indent=2))
             print(f"  {m.source_name}: {len(result.lines)} lines, total={result.total}")
+        elif isinstance(result, Comprobantes):
+            todo = f", {len(result.untranscribed)} pages to transcribe" if result.untranscribed else ""
+            print(f"  {m.source_name}: {len(result.tickets)} receipts{todo}")
+            for st in result.bank:
+                print(f"    {st.banco} {st.desde}..{st.hasta}: balance OK, {len(st.movements)} payments "
+                      f"(pages {st.page_nos[0]}-{st.page_nos[-1]})")  # fmt: skip
         elif result is not None:
             print(f"  {m.source_name}: {len(result.articles)} articles")  # type: ignore[attr-defined]
     return 0
@@ -36,7 +42,7 @@ def cmd_validate(_: argparse.Namespace) -> int:
     from .extract import load_extract
     from .ingest import load_manifests
     from .schemas import Liquidacion
-    from .validate import check_liquidacion
+    from .validate import check_liquidacion, check_resumen
 
     problems: list[str] = []
     checked = 0
@@ -44,11 +50,61 @@ def cmd_validate(_: argparse.Namespace) -> int:
         ext = load_extract(m)
         if isinstance(ext, Liquidacion):
             checked += 1
-            problems += check_liquidacion(ext)
+            problems += check_liquidacion(ext) + check_resumen(ext)
+    from .review import dangling_decisions
+
+    dangling = dangling_decisions()
+    problems += [f"review.json: {d} refers to something that no longer exists" for d in dangling]
     for p in problems:
         print(f"FAIL {p}")
     print(f"{checked} liquidaciones checked, {len(problems)} problems")
     return 1 if problems else 0
+
+
+def cmd_review(args: argparse.Namespace) -> int:
+    from .review import serve
+
+    serve(args.port)
+    return 0
+
+
+def cmd_match(_: argparse.Namespace) -> int:
+    """Receipt coverage per period (what `make review` will show)."""
+    from collections import defaultdict
+
+    from .ingest import load_manifests
+    from .match import AUTO, collect, match
+    from .review import load_review
+
+    lines, tickets, _ = collect(load_manifests())
+    links = match(lines, tickets, load_review())
+    periods_with_receipts = {t.period for t in tickets}
+    by_line = defaultdict(list)
+    for ln in links:
+        by_line[ln.line_id].append(ln)
+    for period in sorted(periods_with_receipts):
+        pl = [ln for ln in lines if ln.period == period]
+        total = sum(ln.importe for ln in pl)
+        covered = sum(ln.importe for ln in pl if ln.id in by_line)
+        pending = sum(1 for ln in pl if ln.id in by_line and min(x.score for x in by_line[ln.id]) < AUTO
+                      and not all(x.status == "verified" for x in by_line[ln.id]))  # fmt: skip
+        print(f"{period}: {len(pl)} lines, {sum(1 for ln in pl if ln.id in by_line)} with receipt "
+              f"({covered / total:.0%} of the amount), {pending} to review")  # fmt: skip
+    unused = [t for t in tickets if t.id not in {x.ticket_id for x in links}]
+    print(f"{len(tickets)} receipts, {len(unused)} not linked to any line")
+
+    from .match import collect_movements, match_payments
+
+    movements, mlookup = collect_movements(load_manifests())
+    if movements:
+        pay = match_payments(lines, movements, load_review())
+        auto = sum(1 for x in pay if x.status in ("auto", "verified"))
+        print(f"{len(movements)} bank payments, {auto} linked, {len(pay) - auto} to review")
+        no_backing = [ln for ln in lines if ln.period in periods_with_receipts | {m.period for m in movements}
+                      and ln.id not in by_line and ln.id not in {x.line_id for x in pay}]  # fmt: skip
+        for ln in no_backing:
+            print(f"  without receipt or payment: {ln.period} {ln.text[:60]} {ln.importe:,.2f}")
+    return 0
 
 
 def cmd_publish(args: argparse.Namespace) -> int:
@@ -81,6 +137,13 @@ def main(argv: list[str] | None = None) -> int:
 
     s = sub.add_parser("validate", help="sum checks on extracted liquidaciones")
     s.set_defaults(fn=cmd_validate)
+
+    s = sub.add_parser("review", help="local review page for receipts and links")
+    s.add_argument("--port", type=int, default=8790)
+    s.set_defaults(fn=cmd_review)
+
+    s = sub.add_parser("match", help="receipt coverage report")
+    s.set_defaults(fn=cmd_match)
 
     s = sub.add_parser("publish", help="upload to D1 + R2")
     s.add_argument("--local", action="store_true", help="target local wrangler state instead of Cloudflare")

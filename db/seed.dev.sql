@@ -1,6 +1,6 @@
 -- FAKE data for local development only (`make seed-local`). Not real building data.
 -- Page images are not seeded, so the viewer shows a broken image until `make publish-local`.
-DELETE FROM expense_lines; DELETE FROM periods; DELETE FROM reglamento_articles; DELETE FROM pages; DELETE FROM documents;
+DELETE FROM expense_payment_links; DELETE FROM bank_movements; DELETE FROM expense_lines; DELETE FROM periods; DELETE FROM reglamento_articles; DELETE FROM pages; DELETE FROM documents;
 
 INSERT INTO documents (id, kind, period, title, r2_key_pdf, sha256, pages) VALUES
   (901, 'reglamento', NULL, 'Reglamento de copropiedad (EJEMPLO)', 'dev/reglamento.pdf', 'dev-901', 2),
@@ -27,3 +27,11 @@ INSERT INTO expense_lines (period_id, rubro, subcategoria, concepto, proveedor, 
 INSERT INTO reglamento_articles (numero, orden, titulo, texto, page_ids_json) VALUES
   ('1', 1, 'Del objeto', 'Texto de ejemplo del reglamento sobre cocheras y espacios comunes.', '[9010001]'),
   ('2', 2, 'Mascotas', 'Texto de ejemplo sobre mascotas en el edificio.', '[9010002]');
+
+-- Bank payments (FAKE): one transfer and the month's grouped bank charges.
+INSERT INTO bank_movements (id, document_id, page_id, page_ids_json, period_id, fecha, banco, descripcion, importe, kind, items_json) VALUES
+  (9500001, 903, 9030001, '[9030001]', '2026-10', '2026-10-15', 'Banco Ejemplo S.A.', 'TRANSF.INTERB.DISTINTO TIT. PINTURERIA EJEMPLO', 450000, 'debito', '[]'),
+  (9500002, 903, 9030001, '[9030001]', '2026-10', '2026-10-31', 'Banco Ejemplo S.A.', 'Gastos bancarios oct 2026 (comisiones e impuestos)', 12500, 'gastos',
+   '[{"descripcion":"IMPUESTO LEY 25413","importe":9000,"cantidad":12},{"descripcion":"I.V.A.","importe":3500,"cantidad":5}]');
+INSERT INTO expense_payment_links (expense_line_id, movement_id, score, status)
+  SELECT id, 9500001, 0.9, 'auto' FROM expense_lines WHERE period_id = '2026-10' AND concepto = 'Pintura palier piso 4';

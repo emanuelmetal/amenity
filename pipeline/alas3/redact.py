@@ -39,6 +39,9 @@ _DNI_LABELED = re.compile(
     r"(\s*(?:n[°ºo.]*\s*:?|nro\.?\s*:?|:)?\s*)(\d{1,2}[. ]?\d{3}[. ]?\d{3})\b"
 )
 _DNI_DOTTED = re.compile(r"(?<![\d.,$])(?<!\$ )\d{1,2}\.\d{3}\.\d{3}(?![\d.,])")
+# A long digit run that starts with a person CUIT: the human-readable line under the
+# barcode of older AFIP invoices (CUIT + type + point of sale + CAE + due date).
+_CUIT_PREFIXED_RUN = re.compile(r"(?<!\d)2[0347]\d{18,}(?!\d)")
 
 PERSON_CUIT_PREFIXES = {"20", "23", "24", "27"}
 
@@ -78,6 +81,21 @@ class PagePolicy:
     open_block: bool = False  # a debt block was still open at the end of the page
 
 
+def valid_cuit(digits: str) -> bool:
+    """CUIT/CUIL check digit (mod 11)."""
+    if len(digits) != 11 or not digits.isdigit():
+        return False
+    total = sum(int(d) * w for d, w in zip(digits[:10], (5, 4, 3, 2, 7, 6, 5, 4, 3, 2), strict=True))
+    check = 11 - total % 11
+    check = {11: 0, 10: 9}.get(check, check)
+    return check == int(digits[10])
+
+
+def _cuit_runs(text: str) -> list[str]:
+    # Only when the first 11 digits are a valid CUIT: utility payment barcodes also start with 2x.
+    return [m.group(0) for m in _CUIT_PREFIXED_RUN.finditer(text) if valid_cuit(m.group(0)[:11])]
+
+
 def _mask_cuit(m: re.Match[str]) -> str:
     return MASK if m.group(1) in PERSON_CUIT_PREFIXES else m.group(0)
 
@@ -93,6 +111,7 @@ def redact_text(text: str | None) -> str | None:
         ),
         text,
     )
+    text = _CUIT_PREFIXED_RUN.sub(lambda m: MASK if valid_cuit(m.group(0)[:11]) else m.group(0), text)
     text = _CBU.sub(MASK, text)
     text = _CUIT.sub(_mask_cuit, text)
     text = _DNI_LABELED.sub(lambda m: f"{m.group(1)}{m.group(2)}{MASK}", text)
@@ -108,6 +127,7 @@ def sensitive_strings(text: str) -> list[str]:
         for m in _CUIT_LABELED.finditer(text)
         if m.group(2).upper() == "L" or m.group(4)[:2] in PERSON_CUIT_PREFIXES
     ]
+    found += _cuit_runs(text)
     found += [m.group(0) for m in _CBU.finditer(text)]
     found += [m.group(0) for m in _CUIT.finditer(text) if m.group(1) in PERSON_CUIT_PREFIXES]
     found += [m.group(3) for m in _DNI_LABELED.finditer(text)]

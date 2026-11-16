@@ -124,3 +124,22 @@ def test_review_identifier_forms():
         assert "12345678" not in redact_text(t), t
     assert "12345678" not in redact_text("CUIL 21-12345678-9")  # labelled CUIL: any prefix
     assert redact_text("CUIT 30-71234567-9") == "CUIT 30-71234567-9"  # companies stay
+
+
+def test_barcode_number_starting_with_a_person_cuit_is_masked():
+    """The digits under an old AFIP barcode start with the issuer's CUIT (invented here)."""
+    from alas3.redact import redact_text, sensitive_strings
+
+    run = "2011111111206000123456789012345202601015"
+    assert redact_text(f"CAE {run}") == "CAE [oculto]"
+    assert run in sensitive_strings(f"x {run} y")
+    company = "3011111111206000123456789012345202601015"
+    assert redact_text(company) == company  # companies' barcodes stay
+
+
+def test_utility_payment_barcode_is_not_mistaken_for_a_cuit():
+    from alas3.redact import redact_text, valid_cuit
+
+    run = "2400000000106000123456789012345202601015"  # starts with 24, but no valid CUIT check digit
+    assert not valid_cuit(run[:11])
+    assert redact_text(run) == run

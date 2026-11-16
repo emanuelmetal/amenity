@@ -1,4 +1,4 @@
-import { BookOpen, Building2, HelpCircle, LayoutDashboard, Menu, Receipt, Search } from "lucide-react";
+import { BookOpen, Building2, ChartColumn, FileText, HelpCircle, LayoutDashboard, Menu, Receipt, Search } from "lucide-react";
 import { useState, type FormEvent, type ReactNode } from "react";
 import { NavLink, Outlet, useNavigate } from "react-router";
 import { formatDate } from "../lib/format";
@@ -16,6 +16,8 @@ const NAV: { section: string; items: { to: string; label: string; icon: ReactNod
     section: "Documentos",
     items: [
       { to: "/gastos", label: "Gastos", icon: <Receipt size={18} /> },
+      { to: "/comprobantes", label: "Comprobantes", icon: <FileText size={18} /> },
+      { to: "/analisis", label: "Análisis", icon: <ChartColumn size={18} /> },
       { to: "/reglamento", label: "Reglamento", icon: <BookOpen size={18} /> },
     ],
   },

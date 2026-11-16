@@ -7,6 +7,17 @@ type Bindings = Env & { session: SessionData };
 export const api = new Hono<{ Bindings: Bindings }>().basePath("/api");
 
 const PAGE_SIZE = 50;
+const MAX_FILTER_VALUES = 100; // bounds the number of SQL parameters per filter
+/** A link counts as "has a receipt" when a human confirmed it or the match is confident;
+ *  "posible coincidencia" links (score < 0.9) are shown but not counted as coverage. */
+const COVERED = "(l.status = 'verified' OR (l.status = 'auto' AND l.score >= 0.9))";
+/** A line is backed by a covered receipt link or by a covered bank payment (same rule). */
+const BACKED = (line: string) =>
+  `(EXISTS (SELECT 1 FROM expense_ticket_links l WHERE l.expense_line_id = ${line} AND ${COVERED})
+    OR EXISTS (SELECT 1 FROM expense_payment_links l WHERE l.expense_line_id = ${line} AND ${COVERED}))`;
+/** Periods with uploaded evidence (receipts or a bank statement): only there "sin comprobante" means something. */
+const EVIDENCE_PERIODS =
+  "SELECT period_id FROM tickets WHERE period_id IS NOT NULL UNION SELECT period_id FROM bank_movements";
 
 /** Turns free text into a safe FTS5 query: each word quoted, last one as prefix. */
 export function toFtsQuery(q: string): string | null {
@@ -61,8 +72,22 @@ api.get("/expenses", async (c) => {
     args.push(v);
     where.push(sql.replace("?", `?${args.length}`));
   };
-  if (q.period) add("e.period_id = ?", q.period);
-  if (q.rubro) add("e.rubro = ?", q.rubro);
+  // Multi-value filters: ?period=2026-01&period=2026-02 (repeated, never comma-split: rubros may contain commas).
+  const addIn = (col: string, values: string[] | undefined) => {
+    const vs = [...new Set((values ?? []).filter(Boolean))].slice(0, MAX_FILTER_VALUES);
+    if (!vs.length) return;
+    const ph = vs.map((v) => {
+      args.push(v);
+      return `?${args.length}`;
+    });
+    where.push(`${col} IN (${ph.join(",")})`);
+  };
+  addIn("e.period_id", c.req.queries("period"));
+  addIn("e.rubro", c.req.queries("rubro"));
+  if (q.sin_comprobante === "1") {
+    // Only meaningful for periods whose receipts were uploaded; the client says so.
+    where.push(`NOT ${BACKED("e.id")}`);
+  }
   const min = intParam(q.min);
   const max = intParam(q.max);
   if (min !== null) add("e.importe >= ?", min);
@@ -84,7 +109,9 @@ api.get("/expenses", async (c) => {
   const [rows, agg] = await c.env.DB.batch([
     c.env.DB.prepare(
       `SELECT e.id, e.period_id, e.rubro, e.subcategoria, e.concepto, e.detalle, e.proveedor, e.importe,
-              CASE WHEN pg.restricted = 0 THEN e.page_id END AS page_id, e.confidence, e.verified
+              CASE WHEN pg.restricted = 0 THEN e.page_id END AS page_id, e.confidence, e.verified,
+              (SELECT COUNT(*) FROM expense_ticket_links l WHERE l.expense_line_id = e.id AND l.status != 'rejected') AS tickets,
+              (SELECT COUNT(*) FROM expense_payment_links l WHERE l.expense_line_id = e.id AND l.status != 'rejected') AS pagos
        FROM expense_lines e LEFT JOIN pages pg ON pg.id = e.page_id ${whereSql}
        ORDER BY ${sortCol} ${dir}, e.id ASC
        LIMIT ${PAGE_SIZE} OFFSET ${offset}`,
@@ -109,7 +136,186 @@ api.get("/expenses/:id", async (c) => {
     .bind(c.req.param("id"))
     .first();
   if (!row) return c.json({ error: "not_found" }, 404);
-  return c.json(row);
+  const { results: tickets } = await c.env.DB.prepare(
+    `SELECT t.id, t.kind, t.letra, t.fecha, t.proveedor, t.descripcion, t.total, t.verified, t.source,
+            l.score, l.status, ${PUBLIC_PAGE("t.page_id")} AS page_id
+     FROM expense_ticket_links l JOIN tickets t ON t.id = l.ticket_id
+     WHERE l.expense_line_id = ?1 AND l.status != 'rejected'
+     ORDER BY t.total DESC`,
+  )
+    .bind(c.req.param("id"))
+    .all();
+  const { results: payRows } = await c.env.DB.prepare(
+    `SELECT b.id, b.fecha, b.banco, b.descripcion, b.importe, b.kind, b.items_json,
+            l.score, l.status, ${PUBLIC_PAGE("b.page_id")} AS page_id, b.page_ids_json
+     FROM expense_payment_links l JOIN bank_movements b ON b.id = l.movement_id
+     WHERE l.expense_line_id = ?1 AND l.status != 'rejected'
+     ORDER BY b.importe DESC`,
+  )
+    .bind(c.req.param("id"))
+    .all();
+  const payments = await Promise.all(
+    (payRows as { items_json: string; page_ids_json: string }[]).map(async ({ items_json, page_ids_json, ...p }) => ({
+      ...p,
+      items: JSON.parse(items_json) as unknown[],
+      pages: await publicPages(c.env, page_ids_json),
+    })),
+  );
+  return c.json({ ...row, tickets, payments });
+});
+
+// ---- Receipts (comprobantes) -------------------------------------------------
+
+/** SQL expression: the page id when that page is published, else NULL. */
+const PUBLIC_PAGE = (col: string) => `(SELECT p.id FROM pages p WHERE p.id = ${col} AND p.restricted = 0)`;
+
+/** Published page ids from a page_ids_json column (restricted ones are dropped). */
+async function publicPages(env: Env, json: string): Promise<{ id: number; document_id: number; page_no: number }[]> {
+  const ids = (JSON.parse(json) as unknown[]).filter((x): x is number => Number.isInteger(x)).slice(0, 50);
+  if (!ids.length) return [];
+  const ph = ids.map((_, i) => `?${i + 1}`).join(",");
+  const { results } = await env.DB.prepare(
+    `SELECT id, document_id, page_no FROM pages WHERE restricted = 0 AND id IN (${ph}) ORDER BY page_no`,
+  )
+    .bind(...ids)
+    .all<{ id: number; document_id: number; page_no: number }>();
+  return results;
+}
+
+const TICKET_KINDS = new Set(["factura", "recibo", "presupuesto", "ticket", "servicio", "nota_credito", "nota_debito", "otro"]);
+
+api.get("/tickets", async (c) => {
+  const q = c.req.query();
+  const where: string[] = [];
+  const args: unknown[] = [];
+  const add = (sql: string, v: unknown) => {
+    args.push(v);
+    where.push(sql.replaceAll("?", `?${args.length}`));
+  };
+  const periods = [...new Set(c.req.queries("period") ?? [])].filter(Boolean).slice(0, MAX_FILTER_VALUES);
+  if (periods.length) {
+    const ph = periods.map((p) => {
+      args.push(p);
+      return `?${args.length}`;
+    });
+    where.push(`t.period_id IN (${ph.join(",")})`);
+  }
+  if (q.kind && TICKET_KINDS.has(q.kind)) add("t.kind = ?", q.kind);
+  if (q.q) add("(t.proveedor LIKE ? ESCAPE '\\' OR t.descripcion LIKE ? ESCAPE '\\')", `%${q.q.replace(/[\\%_]/g, (m) => `\\${m}`)}%`);
+  const LINKED = "EXISTS (SELECT 1 FROM expense_ticket_links l WHERE l.ticket_id = t.id AND l.status != 'rejected')";
+  if (q.linked === "1") where.push(LINKED);
+  if (q.linked === "0") where.push(`NOT ${LINKED}`);
+  const whereSql = where.length ? `WHERE ${where.join(" AND ")}` : "";
+  const page = Math.min(10_000, Math.max(1, Math.floor(intParam(q.page) ?? 1)));
+  const [rows, agg] = await c.env.DB.batch([
+    c.env.DB.prepare(
+      `SELECT t.id, t.kind, t.letra, t.fecha, t.proveedor, t.descripcion, t.total, t.period_id, t.subcategoria,
+              t.verified, t.source, ${PUBLIC_PAGE("t.page_id")} AS page_id, ${LINKED} AS linked
+       FROM tickets t ${whereSql}
+       ORDER BY t.period_id DESC, t.fecha DESC, t.id
+       LIMIT ${PAGE_SIZE} OFFSET ${(page - 1) * PAGE_SIZE}`,
+    ).bind(...args),
+    c.env.DB.prepare(`SELECT COUNT(*) AS count, COALESCE(SUM(t.total),0) AS total FROM tickets t ${whereSql}`).bind(...args),
+  ]);
+  const a = (agg.results[0] ?? { count: 0, total: 0 }) as { count: number; total: number };
+  return c.json({ rows: rows.results, count: a.count, total: a.total, page, pageSize: PAGE_SIZE });
+});
+
+api.get("/tickets/:id", async (c) => {
+  const t = await c.env.DB.prepare(
+    `SELECT t.id, t.kind, t.letra, t.fecha, t.proveedor, t.cuit, t.tipo_cmp, t.pto_vta, t.nro_cmp, t.cae, t.total,
+            t.medio_pago, t.descripcion, t.period_id, t.subcategoria, t.source, t.confidence, t.verified,
+            t.page_ids_json, t.document_id
+     FROM tickets t WHERE t.id = ?1`,
+  )
+    .bind(c.req.param("id"))
+    .first<{ page_ids_json: string } & Record<string, unknown>>();
+  if (!t) return c.json({ error: "not_found" }, 404);
+  const [items, lines] = await c.env.DB.batch([
+    c.env.DB.prepare("SELECT descripcion, cantidad, importe FROM ticket_items WHERE ticket_id = ?1 ORDER BY id").bind(t.id),
+    c.env.DB.prepare(
+      `SELECT e.id, e.period_id, e.rubro, e.concepto, e.detalle, e.importe, l.score, l.status
+       FROM expense_ticket_links l JOIN expense_lines e ON e.id = l.expense_line_id
+       WHERE l.ticket_id = ?1 AND l.status != 'rejected' ORDER BY e.importe DESC`,
+    ).bind(t.id),
+  ]);
+  const { page_ids_json, ...rest } = t;
+  return c.json({ ...rest, pages: await publicPages(c.env, page_ids_json), items: items.results, lines: lines.results });
+});
+
+// ---- Dashboard and saved analyses --------------------------------------------
+
+api.get("/stats/monthly", async (c) => {
+  const { results } = await c.env.DB.prepare(
+    `SELECT p.id, COALESCE(p.total, (SELECT SUM(importe) FROM expense_lines e WHERE e.period_id = p.id)) AS gastos,
+            p.ingresos, p.egresos, p.saldo_inicial, p.saldo_final,
+            (SELECT COUNT(*) FROM tickets t WHERE t.period_id = p.id) AS receipts,
+            (SELECT COALESCE(SUM(e.importe),0) FROM expense_lines e WHERE e.period_id = p.id AND ${BACKED("e.id")}) AS con_comprobante,
+            (SELECT COUNT(*) FROM expense_lines e WHERE e.period_id = p.id AND NOT ${BACKED("e.id")}) AS lineas_sin_comprobante
+     FROM periods p ORDER BY p.id`,
+  ).all();
+  return c.json(results);
+});
+
+api.get("/stats/rubros", async (c) => {
+  const { results } = await c.env.DB.prepare(
+    "SELECT period_id AS period, rubro, SUM(importe) AS total FROM expense_lines GROUP BY period_id, rubro ORDER BY period_id, rubro",
+  ).all();
+  return c.json(results);
+});
+
+api.get("/stats/proveedores", async (c) => {
+  const { results } = await c.env.DB.prepare(
+    `SELECT COALESCE(t.proveedor, 'Sin identificar') AS proveedor, COUNT(*) AS comprobantes, SUM(t.total) AS total
+     FROM tickets t GROUP BY 1 ORDER BY total DESC LIMIT 8`,
+  ).all();
+  return c.json(results);
+});
+
+// A Map, not an object literal: `ANALYSES["constructor"]` on a plain object resolves to
+// Object, and Object(env) would serialise the whole environment (SESSION_SECRET included).
+// Handlers only ever receive the database.
+type DB = Env["DB"];
+const ANALYSES = new Map<string, (db: DB) => Promise<unknown>>(Object.entries({
+  // "Taxis reintegrados al encargado": receipts tagged movilidad/taxi, by month.
+  "taxis-encargado": async (db: DB) => {
+    const { results } = await db.prepare(
+      `SELECT t.id, t.fecha, t.period_id, t.proveedor, t.descripcion, t.total, t.verified, ${PUBLIC_PAGE("t.page_id")} AS page_id
+       FROM tickets t
+       JOIN entity_tags et ON et.entity_type = 'ticket' AND et.entity_id = t.id
+       JOIN tags g ON g.id = et.tag_id AND g.name = 'movilidad/taxi'
+       ORDER BY t.fecha`,
+    ).all();
+    return { items: results };
+  },
+  // Spend per rubro and year.
+  "rubro-por-anio": async (db: DB) => {
+    const { results } = await db.prepare(
+      `SELECT substr(period_id, 1, 4) AS anio, rubro, SUM(importe) AS total, COUNT(DISTINCT period_id) AS meses
+       FROM expense_lines GROUP BY anio, rubro ORDER BY anio, total DESC`,
+    ).all();
+    return { rows: results };
+  },
+  // Lines with neither a receipt nor a bank payment, only for periods with uploaded evidence.
+  "sin-comprobante": async (db: DB) => {
+    const { results } = await db.prepare(
+      `SELECT e.id, e.period_id, e.rubro, e.concepto, e.detalle, e.importe
+       FROM expense_lines e
+       WHERE e.period_id IN (${EVIDENCE_PERIODS})
+         AND NOT ${BACKED("e.id")}
+       ORDER BY e.period_id DESC, e.importe DESC`,
+    ).all();
+    const { results: periods } = await db.prepare(
+      `SELECT period_id AS id FROM (${EVIDENCE_PERIODS}) ORDER BY 1`,
+    ).all();
+    return { items: results, periods_with_receipts: periods.map((p) => (p as { id: string }).id) };
+  },
+}));
+
+api.get("/analyses/:slug", async (c) => {
+  const fn = ANALYSES.get(c.req.param("slug"));
+  if (!fn) return c.json({ error: "not_found" }, 404);
+  return c.json(await fn(c.env.DB));
 });
 
 api.get("/reglamento", async (c) => {
