@@ -353,7 +353,9 @@ def collect_movements(manifests) -> tuple[list[TicketRef], dict]:
     return refs, lookup
 
 
-def match_payments(lines: list[LineRef], movements: list[TicketRef], review: ReviewState | None = None) -> list[Link]:
+def match_payments(
+    lines: list[LineRef], movements: list[TicketRef], review: ReviewState | None = None
+) -> list[Link]:
     """Expense lines <-> bank debits. Decisions come from review.payments."""
     review = review or ReviewState()
     return [

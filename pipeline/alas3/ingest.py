@@ -224,6 +224,11 @@ def ingest_file(path: Path, kind: str, force: bool = False) -> DocumentManifest:
         src = ocr.ocr_document(path, out / "ocr.pdf") or path  # no OCR → those pages fail closed (no_text)
 
     ov = load_overrides().get(manifest.work_dir_name, _Override())
+    checked: dict = {}
+    if kind == "comprobantes":
+        from .receipts import load_transcription
+
+        checked = load_transcription(manifest).checked  # fails loudly on a bad file
     plans: list[tuple[PageRecord, list[pymupdf.Rect]]] = []
     carry = False  # a debt block that continues from the previous page
     qr_payloads: dict[int, list[str]] = {}
@@ -259,8 +264,22 @@ def ingest_file(path: Path, kind: str, force: bool = False) -> DocumentManifest:
                 # kept privately so bank.py can still check the balance.
                 hidden |= bank.private_lines(row_texts)
                 bank.private_text_path(manifest, page_no).write_text("\n".join(row_texts))
+            # Areas a person marked on a checked scan: blacked out in the image below, and the
+            # OCR text read from them is dropped too (it would still be searchable).
+            manual: list[pymupdf.Rect] = []
+            if kind == "comprobantes":
+                for b in checked.get(page_no, []):
+                    w, h = page.rect.width, page.rect.height
+                    shown = pymupdf.Rect(b.x0 * w, b.y0 * h, b.x1 * w, b.y1 * h)
+                    manual.append((shown * page.derotation_matrix) & page.mediabox)
+                    # Text positions may be reported in either orientation: hide rows touching either.
+                    hidden |= {
+                        j
+                        for j, (_, rr) in enumerate(rows)
+                        if rr.intersects(shown) or rr.intersects(manual[-1])
+                    }
 
-            rects: list[pymupdf.Rect] = []
+            rects: list[pymupdf.Rect] = list(manual)
             visible: list[str] = []
             for j, (text, rect) in enumerate(rows):
                 if j in hidden:
@@ -324,6 +343,17 @@ def ingest_file(path: Path, kind: str, force: bool = False) -> DocumentManifest:
                         reason = (
                             "unlocated_identifier"  # a CUIT is printed but we cannot find the person's one
                         )
+
+            if kind == "comprobantes" and (i in scanned or mixed):
+                # A photo or scan: OCR may not even read the word "CUIT", so a person's number
+                # can survive masking. Published only after someone checked the image.
+                if page_no not in checked:
+                    reason = reason or "unchecked_scan"
+                elif reason in ("no_text", "qr_not_located", "unlocated_identifier"):
+                    # Unreadable for OCR, a QR the detector missed, or a number masked in the text
+                    # but not found on the image: a person looked at the image and listed what
+                    # to black out (the QR or number included).
+                    reason = None
 
             if page_no in ov.restrict:
                 reason = "manual"

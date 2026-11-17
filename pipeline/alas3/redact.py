@@ -35,15 +35,28 @@ _CUIT_LABELED = re.compile(
 )
 # DNI after a label (dotted, spaced or plain), or in dotted form NN.NNN.NNN.
 _DNI_LABELED = re.compile(
-    r"(?i)\b(D\.?\s?N\.?\s?I\.?|D\.?\s?U\.?|M\.?\s?I\.?|documento(?:\s+nacional\s+de\s+identidad)?|doc\.|L\.?\s?E\.?|L\.?\s?C\.?)"
+    # A CUIT/CUIL label followed by only 7-8 digits is a DNI ("C.U.I.T.: 16408564").
+    r"(?i)\b(D\.?\s?N\.?\s?[Il1|]\.?|D\.?\s?U\.?|M\.?\s?I\.?|documento(?:\s+nacional\s+de\s+identidad)?|doc\.|L\.?\s?E\.?|L\.?\s?C\.?"
+    r"|C\.?\s?U\.?\s?I\.?\s?[TL]\.?)"
     r"(\s*(?:n[°ºo.]*\s*:?|nro\.?\s*:?|:)?\s*)(\d{1,2}[. ]?\d{3}[. ]?\d{3})\b"
 )
+# Insurers write a DNI as "D" + zero padding: "D0000012345678".
+_DNI_PADDED = re.compile(r"\bD0{2,}(\d{7,8})\b")
 _DNI_DOTTED = re.compile(r"(?<![\d.,$])(?<!\$ )\d{1,2}\.\d{3}\.\d{3}(?![\d.,])")
 # A long digit run that starts with a person CUIT: the human-readable line under the
 # barcode of older AFIP invoices (CUIT + type + point of sale + CAE + due date).
 _CUIT_PREFIXED_RUN = re.compile(r"(?<!\d)2[0347]\d{18,}(?!\d)")
 
 PERSON_CUIT_PREFIXES = {"20", "23", "24", "27"}
+
+# Documents about one person (an insurance policy lists the insured, their DNI and home).
+PERSONAL_PATTERNS = [
+    re.compile(p, re.I)
+    for p in (
+        r"asegurado\s*/\s*domicilio",
+        r"accidentes\s+personales.*\n(?:.*\n){0,40}?.*asegurado",
+    )
+]
 
 PAYROLL_PATTERNS = [
     re.compile(p, re.I)
@@ -54,6 +67,12 @@ PAYROLL_PATTERNS = [
         r"sueldo\s+b[aá]sico",
         r"aportes\s+jubilatorios",
         r"\bSUTERH\b.*\bhaberes\b",
+        # Any salary slip, also a vacation month without "sueldo básico".
+        r"neto\s+a\s+cobr",
+        r"firma\s+(?:del\s+)?empleado",
+        r"composici[oó]n\s+salarial",
+        r"sueldo\s+neto",
+        r"costo\s+total\s+empleador",
     )
 ]
 
@@ -115,6 +134,7 @@ def redact_text(text: str | None) -> str | None:
     text = _CBU.sub(MASK, text)
     text = _CUIT.sub(_mask_cuit, text)
     text = _DNI_LABELED.sub(lambda m: f"{m.group(1)}{m.group(2)}{MASK}", text)
+    text = _DNI_PADDED.sub(MASK, text)
     # Dotted 7–8 digit numbers look like DNIs; amounts carry decimals/$ and are excluded by the lookarounds.
     text = _DNI_DOTTED.sub(MASK, text)
     return text
@@ -131,6 +151,7 @@ def sensitive_strings(text: str) -> list[str]:
     found += [m.group(0) for m in _CBU.finditer(text)]
     found += [m.group(0) for m in _CUIT.finditer(text) if m.group(1) in PERSON_CUIT_PREFIXES]
     found += [m.group(3) for m in _DNI_LABELED.finditer(text)]
+    found += [m.group(0) for m in _DNI_PADDED.finditer(text)]
     found += [m.group(0) for m in _DNI_DOTTED.finditer(text)]
     return sorted(set(found), key=len, reverse=True)
 
@@ -152,6 +173,8 @@ def page_policy(rows: str | list[str], *, scanned: bool = False, carry_in: bool 
         return PagePolicy(restricted="no_text" if scanned else None)
     if any(p.search(text) for p in PAYROLL_PATTERNS):
         return PagePolicy(restricted="payroll")
+    if any(p.search(text) for p in PERSONAL_PATTERNS):
+        return PagePolicy(restricted="personal")
 
     hidden: set[int] = set()
     in_block = carry_in

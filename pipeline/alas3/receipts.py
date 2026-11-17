@@ -39,14 +39,16 @@ def load_transcription(m: DocumentManifest) -> TicketTranscription:
     return TicketTranscription.model_validate_json(p.read_text())  # fails loudly on bad input
 
 
-def qr_tickets(m: DocumentManifest) -> list[Ticket]:
+def qr_tickets(m: DocumentManifest, ignore: set[tuple[int, int, int]] | None = None) -> list[Ticket]:
+    """ignore: (page, pto_vta, nro_cmp) of QRs that encode another voucher (see IgnoredQR)."""
+    ignore = ignore or set()
     p = doc_dir(m) / "raw" / "qr.json"
     payloads: dict[str, list[str]] = json.loads(p.read_text()) if p.exists() else {}
     by_key: dict[tuple, Ticket] = {}
     for page_no, values in sorted(payloads.items(), key=lambda kv: int(kv[0])):
         for v in values:
             f = parse_arca(v)
-            if not f:
+            if not f or (int(page_no), f["pto_vta"], f["nro_cmp"]) in ignore:
                 continue
             kind, letra = TIPO_CMP.get(f["tipo_cmp"], ("otro", None))
             t = Ticket(page_nos=[int(page_no)], kind=kind, letra=letra, source="qr", confidence=1.0, **f)  # type: ignore[arg-type]
@@ -63,8 +65,9 @@ def _same_voucher(a: Ticket, b: Ticket) -> bool:
     ka, kb = a.key(), b.key()
     if not ka or not kb:
         return False
-    # The transcription may leave the CUIT out (or have it masked): compare the rest.
-    return ka[1:] == kb[1:] and (not ka[0] or not kb[0] or ka[0] == kb[0])
+    # The transcription may leave the CUIT (or have it masked) or the voucher type out:
+    # point of sale + number must agree, the others only when both sides have them.
+    return ka[2:] == kb[2:] and all(not x or not y or x == y for x, y in ((ka[0], kb[0]), (ka[1], kb[1])))
 
 
 def build(m: DocumentManifest) -> Comprobantes:
@@ -73,9 +76,9 @@ def build(m: DocumentManifest) -> Comprobantes:
 
 def build_with_origin(m: DocumentManifest) -> tuple[Comprobantes, list[int | None]]:
     """Also returns, per ticket, the index of its transcription entry (None: QR only)."""
-    tickets = qr_tickets(m)
-    origin: list[int | None] = [None] * len(tickets)
     tr = load_transcription(m)
+    tickets = qr_tickets(m, {(q.page, q.pto_vta, q.nro_cmp) for q in tr.ignore_qr})
+    origin: list[int | None] = [None] * len(tickets)
     for idx, t in enumerate(tr.tickets):
         target = next((q for q in tickets if _same_voucher(q, t)), None)
         if target is None:
@@ -119,4 +122,6 @@ def build_with_origin(m: DocumentManifest) -> tuple[Comprobantes, list[int | Non
     covered |= {n for s in statements for n in s.page_nos}
     covered -= set(failed)
     todo = [p.page_no for p in m.pages if p.page_no not in covered and not p.restricted]
-    return Comprobantes(tickets=tickets, other_pages=tr.other_pages, untranscribed=todo, bank=statements), origin
+    return Comprobantes(
+        tickets=tickets, other_pages=tr.other_pages, untranscribed=todo, bank=statements
+    ), origin

@@ -263,3 +263,48 @@ def test_same_voucher_number_from_two_vendors_keeps_its_id():
     ia, ib = ticket_ids("s", [a, b])
     assert ia != ib and ticket_ids("s", [b, a]) == [ib, ia]
     assert ticket_ids("s", [a.model_copy(update={"tipo_cmp": None})]) == [ia]  # type lost with the QR
+
+
+def test_a_stale_qr_marked_in_the_transcription_is_not_a_receipt(data_dir):
+    """Some vendors print the same old QR every month: it is blacked out but not read as a receipt."""
+    from alas3 import extract, ingest
+    from alas3.receipts import transcription_path
+
+    invoice_pdf(data_dir / "inbox/comprobantes/c_2026-01.pdf", copies=("ORIGINAL",))
+    [m] = ingest.ingest_all()
+    assert [t.total for t in extract.extract_document(m).tickets] == [4800.5]
+    transcription_path(m).parent.mkdir(parents=True, exist_ok=True)
+    transcription_path(m).write_text(json.dumps({
+        "ignore_qr": [{"page": 1, "pto_vta": 3, "nro_cmp": 1234, "motivo": "QR viejo reimpreso"}],
+        "tickets": [{"page_nos": [1], "kind": "factura", "pto_vta": 3, "nro_cmp": 9999, "total": 100.0}],
+    }))  # fmt: skip
+    assert [(t.nro_cmp, t.total) for t in extract.extract_document(m).tickets] == [(9999, 100.0)]
+
+
+def test_scanned_receipts_are_private_until_checked_and_blackouts_applied(data_dir):
+    """OCR may not read a CUIT on a photo: scans are published only after someone looked."""
+    import shutil
+
+    from alas3 import ingest
+    from alas3.receipts import transcription_path
+    from tests.test_pipeline import _image_page
+
+    if not shutil.which("ocrmypdf") and not shutil.which("tesseract"):
+        pytest.skip("OCR not installed")
+    doc = pymupdf.open()
+    _image_page(doc, ["RECIBO", "Juan Gomez  CUIT 2O-I234S678-9", "Total $ 1.500,00", "Mano de obra pintura"])
+    path = data_dir / "inbox/comprobantes/c_2026-01.pdf"
+    doc.save(path)
+    [m] = ingest.ingest_all()
+    assert m.pages[0].restricted_reason == "unchecked_scan"
+    assert not (ingest.doc_dir(m) / "p001.webp").exists()
+
+    transcription_path(m).parent.mkdir(parents=True, exist_ok=True)
+    transcription_path(m).write_text(
+        json.dumps({"checked": {"1": [{"x0": 0.05, "y0": 0.13, "x1": 0.95, "y1": 0.17}]}})
+    )
+    [m] = ingest.ingest_all(force=True)
+    assert not m.pages[0].restricted
+    with pymupdf.open(ingest.doc_dir(m) / "public.pdf") as pub:
+        pix = pub[0].get_pixmap(dpi=50, clip=pymupdf.Rect(0.1 * 595, 0.14 * 842, 0.5 * 595, 0.16 * 842))
+        assert max(pix.samples) < 40  # the area is black

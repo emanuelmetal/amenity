@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 DocKind = Literal["liquidacion", "comprobantes", "reglamento", "acta", "otro"]
 
@@ -140,11 +140,44 @@ class Ticket(BaseModel):
         return (self.cuit and self.cuit.replace("-", ""), self.tipo_cmp, self.pto_vta, self.nro_cmp)
 
 
+class Blackout(BaseModel):
+    """An area of a page to black out, as fractions of the displayed page (0..1)."""
+
+    model_config = ConfigDict(extra="forbid")
+    x0: float = Field(ge=0, le=1)
+    y0: float = Field(ge=0, le=1)
+    x1: float = Field(ge=0, le=1)
+    y1: float = Field(ge=0, le=1)
+    motivo: str = "CUIT"
+
+    @model_validator(mode="after")
+    def _ordered(self) -> Blackout:
+        if not (self.x0 < self.x1 and self.y0 < self.y1):
+            raise ValueError("x0 < x1 and y0 < y1 required")
+        return self
+
+
+class IgnoredQR(BaseModel):
+    """A QR printed on a receipt that encodes another voucher (a vendor reusing an old
+    QR image). Still blacked out on the page; it just does not become a receipt."""
+
+    model_config = ConfigDict(extra="forbid")
+    page: int
+    pto_vta: int
+    nro_cmp: int
+    motivo: str = Field(min_length=3)
+
+
 class TicketTranscription(BaseModel):
     """data/work/extract/<sha16>.tickets.json: hand/Claude transcription of a receipts PDF."""
 
     model_config = ConfigDict(extra="forbid")
     tickets: list[Ticket] = Field(default_factory=list)
+    ignore_qr: list[IgnoredQR] = Field(default_factory=list)
+    # Scanned/photographed pages someone has looked at: page -> areas to black out, each
+    # [x0, y0, x1, y1] as fractions (0..1) of the page as displayed. [] = nothing to hide.
+    # OCR cannot be trusted to find a CUIT on a photo, so unchecked scans are never published.
+    checked: dict[int, list[Blackout]] = Field(default_factory=dict)
     # Pages that hold no receipt, with what they are ("extracto bancario", "contrato", ...).
     other_pages: dict[int, str] = Field(default_factory=dict)
 

@@ -30,12 +30,25 @@ def cmd_ingest(args: argparse.Namespace) -> int:
         elif isinstance(result, Comprobantes):
             todo = f", {len(result.untranscribed)} pages to transcribe" if result.untranscribed else ""
             print(f"  {m.source_name}: {len(result.tickets)} receipts{todo}")
+            for t in result.tickets:
+                # A QR dated long before the bundle is often an old QR image the vendor keeps printing.
+                if t.source == "qr" and t.fecha and m.period and t.fecha[:7] < _months_before(m.period, 6):
+                    print(f"    ! p.{t.page_nos[0]}: QR voucher {t.pto_vta}-{t.nro_cmp} is dated {t.fecha}; "
+                          "if it is not this receipt, add it to ignore_qr in the transcription")  # fmt: skip
             for st in result.bank:
                 print(f"    {st.banco} {st.desde}..{st.hasta}: balance OK, {len(st.movements)} payments "
                       f"(pages {st.page_nos[0]}-{st.page_nos[-1]})")  # fmt: skip
         elif result is not None:
             print(f"  {m.source_name}: {len(result.articles)} articles")  # type: ignore[attr-defined]
     return 0
+
+
+def _months_before(period: str, n: int) -> str:
+    y, m = map(int, period.split("-"))
+    m -= n
+    while m < 1:
+        y, m = y - 1, m + 12
+    return f"{y}-{m:02d}"
 
 
 def cmd_validate(_: argparse.Namespace) -> int:
