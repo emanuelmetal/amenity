@@ -27,6 +27,7 @@ _ARCA_HOST = re.compile(r"(^|\.)(afip|arca)\.gob\.ar$", re.I)
 _LEADING_ZEROS = re.compile(r"([:,\[]\s*)0+(\d)")
 # Render resolutions tried in order; small QRs on scans need the higher one.
 DPIS = (150, 300)
+RETRY_DPIS = (400, 600)  # invoice pages whose QR was not decoded: slower, finds small or blurry ones
 MAX_ROUNDS = 6  # detect -> mask -> detect again, per resolution
 
 
@@ -57,29 +58,38 @@ def _to_rect(page: pymupdf.Page, pts, dpi: int, pad: float = 4.0) -> pymupdf.Rec
     return r * page.derotation_matrix  # pixmaps show the rotated page; annotations use unrotated coords
 
 
-def find_qr(page: pymupdf.Page) -> list[FoundQR]:
+def find_qr(
+    page: pymupdf.Page, rejected: list[pymupdf.Rect] | None = None, dpis: tuple[int, ...] = DPIS
+) -> list[FoundQR]:
     """All QR codes on the page: decoded payloads plus located-only ones.
 
     Every resolution and detector always runs: stopping once the codes found so far are
     decoded would miss a small second QR (a second receipt on the page) that only shows
     up at the higher resolution, and every QR must be blacked out.
+
+    Located-only detections that don't look like a QR (see plausible_qr) are skipped;
+    they are appended to `rejected` so the caller can fail closed on an invoice page.
     """
     found: list[FoundQR] = []
 
     def add(val: str | None, pts, dpi: int) -> None:
         rect = _to_rect(page, pts, dpi)
         if not val and not plausible_qr(page, rect):
-            return  # a located-only "QR" the size of half the page is noise (handwriting, table lines)
+            # A located-only "QR" the size of half the page is usually noise (handwriting,
+            # table lines), but it could be a large or skewed real one: report it.
+            if rejected is not None and not any(overlap(rect, r) for r in rejected):
+                rejected.append(rect & page.mediabox)
+            return
         rect &= page.mediabox  # never black out beyond the page
         for f in found:
-            if _overlap(rect, f.rect):
+            if overlap(rect, f.rect):
                 f.payload = f.payload or val or None  # same code seen again: keep the decoded version
                 return
         found.append(FoundQR(payload=val or None, rect=rect))
 
     import numpy as np
 
-    for dpi in DPIS:
+    for dpi in dpis:
         img = _gray(page, dpi)
         # A large code can hide a small one from the detectors: paint every code found
         # white and search again, until a round finds nothing new.
@@ -117,14 +127,26 @@ QR_MIN_SIDE = 0.02
 def plausible_qr(page: pymupdf.Page, rect: pymupdf.Rect) -> bool:
     short = min(page.mediabox.width, page.mediabox.height)
     w, h = rect.width, rect.height
-    if not (QR_MIN_SIDE * short <= w <= QR_MAX_SIDE * short and QR_MIN_SIDE * short <= h <= QR_MAX_SIDE * short):
+    if not (
+        QR_MIN_SIDE * short <= w <= QR_MAX_SIDE * short and QR_MIN_SIDE * short <= h <= QR_MAX_SIDE * short
+    ):
         return False
     return 0.6 <= w / h <= 1.6
 
 
-def _overlap(a: pymupdf.Rect, b: pymupdf.Rect) -> bool:
+def overlap(a: pymupdf.Rect, b: pymupdf.Rect) -> bool:
     inter = pymupdf.Rect(a) & b
     return not inter.is_empty and inter.get_area() > 0.5 * min(a.get_area(), b.get_area())
+
+
+def _digits(v: object) -> str:
+    """A numeric code as digits. Some issuers write it as a JSON float (8.6e13 -> '86...629.0')."""
+    if isinstance(v, float) and v.is_integer():
+        v = int(v)
+    s = str(v).strip()
+    if not s.isdigit():
+        raise ValueError(f"not a numeric code: {s!r}")
+    return s
 
 
 def parse_arca(payload: str | None) -> dict | None:
@@ -152,12 +174,12 @@ def parse_arca(payload: str | None) -> dict | None:
     try:
         return {
             "fecha": str(data["fecha"])[:10],
-            "cuit": str(data["cuit"]),
+            "cuit": _digits(data["cuit"]),
             "pto_vta": int(data["ptoVta"]),
             "tipo_cmp": int(data["tipoCmp"]),
             "nro_cmp": int(data["nroCmp"]),
             "total": float(data["importe"]),
-            "cae": str(data["codAut"]) if data.get("codAut") else None,
+            "cae": _digits(data["codAut"]) if data.get("codAut") else None,
         }
     except (KeyError, TypeError, ValueError):
         return None

@@ -223,6 +223,7 @@ def _receipts_sql(manifests: list[DocumentManifest], review: ReviewState) -> lis
 def _bank_sql(manifests: list[DocumentManifest], lines: list, review: ReviewState) -> list[str]:
     """Bank debits (payment evidence) and their links to expense lines, rebuilt on every publish."""
     stmts = ["DELETE FROM expense_payment_links;", "DELETE FROM bank_movements;"]
+    published: set[int] = set()
     for m in manifests:
         ext = load_extract(m)
         if not isinstance(ext, Comprobantes):
@@ -231,6 +232,9 @@ def _bank_sql(manifests: list[DocumentManifest], lines: list, review: ReviewStat
         for st in ext.bank:
             for mid, mv in zip(movement_ids(m.work_dir_name, st.movements), st.movements, strict=True):
                 page_ids = [m.page_id(n) for n in mv.page_nos if n not in restricted]
+                if not page_ids:
+                    continue  # read from private pages only: never published (as with receipts)
+                published.add(mid)
                 items = [{"descripcion": redact_text(i.descripcion), "importe": i.importe, "cantidad": i.cantidad}
                          for i in mv.items]  # fmt: skip
                 stmts.append(
@@ -241,7 +245,7 @@ def _bank_sql(manifests: list[DocumentManifest], lines: list, review: ReviewStat
                     f"{qr(mv.descripcion)}, {q(mv.importe)}, {q(mv.kind)}, {q(json.dumps(items, ensure_ascii=False))});"
                 )
     movements, _ = collect_movements(manifests)
-    for ln in match_payments(lines, movements, review):
+    for ln in match_payments(lines, [mv for mv in movements if mv.id in published], review):
         status = "verified" if ln.status == "verified" else "auto"
         stmts.append(
             f"INSERT INTO expense_payment_links VALUES ({ln.line_id}, {ln.ticket_id}, {ln.score}, {q(status)});"

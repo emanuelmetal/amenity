@@ -166,7 +166,10 @@ def test_receipt_partly_on_a_private_page_is_not_published(data_dir):
     """Review M4: data read from a payroll page must not be published via a public cover page."""
     from alas3 import extract, ingest, receipts
 
-    make_pdf(data_dir / "inbox/comprobantes/c_2026-01.pdf", [["RECIBO DE HABERES", "Sueldo básico 1.000,00"], ["Carátula"]])
+    make_pdf(
+        data_dir / "inbox/comprobantes/c_2026-01.pdf",
+        [["RECIBO DE HABERES", "Sueldo básico 1.000,00"], ["Carátula"]],
+    )
     [m] = ingest.ingest_all()
     receipts.transcription_path(m).parent.mkdir(parents=True, exist_ok=True)
     receipts.transcription_path(m).write_text(json.dumps({"tickets": [{"page_nos": [1, 2], "total": 1000}]}))
@@ -204,3 +207,59 @@ def test_implausible_located_only_qr_is_ignored():
     assert not plausible_qr(page, pymupdf.Rect(0, 0, 400, 480))  # most of the page
     assert not plausible_qr(page, pymupdf.Rect(0, 0, 1600, 30000))  # garbage geometry
     assert not plausible_qr(page, pymupdf.Rect(60, 600, 160, 620))  # a thin strip
+
+
+def test_invoice_without_a_located_qr_fails_closed(data_dir):
+    """Review: a page that mentions a CAE but whose QR was not found is not published."""
+    from alas3 import ingest
+
+    path = data_dir / "inbox/comprobantes/c_2026-01.pdf"
+    make_pdf(
+        path,
+        [
+            ["FACTURA C  Comp. Nro: 00001234", "CAE: 70000000000001  Vto. CAE: 25/01/2026"],
+            ["Recibo de mano de obra"],
+        ],
+    )
+    [m] = ingest.ingest_all()
+    assert [(p.page_no, p.restricted_reason) for p in m.pages] == [(1, "qr_not_located"), (2, None)]
+
+
+def test_printed_cuit_from_the_qr_is_blacked_out_or_the_page_restricted(data_dir):
+    """Review: OCR may misread the printed CUIT; the QR gives it exactly."""
+    from alas3 import ingest
+
+    def pdf(name, printed):
+        doc = pymupdf.open()
+        page = doc.new_page()
+        page.insert_text((72, 72), f"FACTURA C  CUIT: {printed}  CAE: 70000000000001", fontsize=10)
+        page.insert_image(pymupdf.Rect(60, 600, 200, 740), stream=qr_png(arca_url()))
+        (data_dir / "inbox/comprobantes").mkdir(parents=True, exist_ok=True)
+        doc.save(data_dir / "inbox/comprobantes" / name)
+
+    pdf("a_2026-01.pdf", "20 11111111 2")  # spaced: still found from the QR's exact digits
+    pdf("b_2026-02.pdf", "2O-1111111I-2")  # misread: cannot be located on the page
+    by_name = {m.source_name: m for m in ingest.ingest_all()}
+    a, b = by_name["a_2026-01.pdf"], by_name["b_2026-02.pdf"]
+    assert not a.pages[0].restricted
+    with pymupdf.open(ingest.doc_dir(a) / "public.pdf") as pub:
+        assert "11111111" not in pub[0].get_text()
+    assert b.pages[0].restricted_reason == "unlocated_identifier"
+
+
+def test_numeric_codes_written_as_floats():
+    f = parse_arca(arca_url(FIELDS | {"codAut": 86172729432629.0, "cuit": 20111111112.0}))
+    assert f["cae"] == "86172729432629" and f["cuit"] == "20111111112"
+    assert parse_arca(arca_url(FIELDS | {"codAut": "86x"})) is None
+
+
+def test_same_voucher_number_from_two_vendors_keeps_its_id():
+    """Review: ids must not swap when the order of receipts changes (a QR stops decoding)."""
+    from alas3.ids import ticket_ids
+    from alas3.schemas import Ticket
+
+    a = Ticket(page_nos=[2], pto_vta=1, nro_cmp=123, tipo_cmp=11)
+    b = Ticket(page_nos=[9], pto_vta=1, nro_cmp=123)
+    ia, ib = ticket_ids("s", [a, b])
+    assert ia != ib and ticket_ids("s", [b, a]) == [ib, ia]
+    assert ticket_ids("s", [a.model_copy(update={"tipo_cmp": None})]) == [ia]  # type lost with the QR

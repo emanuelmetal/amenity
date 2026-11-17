@@ -29,7 +29,7 @@ from pathlib import Path
 import pymupdf
 from pydantic import BaseModel, ConfigDict, TypeAdapter, ValidationError
 
-from . import ocr, qr, redact
+from . import bank, ocr, qr, redact
 from .config import INBOX, KIND_MAP, MIN_TEXT_CHARS, PHASE_KINDS, RENDER_DPI, WEBP_QUALITY, WORK
 from .schemas import DocumentManifest, PageRecord
 
@@ -208,8 +208,8 @@ def ingest_file(path: Path, kind: str, force: bool = False) -> DocumentManifest:
         return DocumentManifest.model_validate_json(mpath.read_text())
 
     (out / "raw").mkdir(parents=True, exist_ok=True)
-    for old in out.glob("p*.webp"):
-        old.unlink()  # a page that became restricted must not keep a stale render
+    for old in [*out.glob("p*.webp"), *(out / "raw").glob("p*.bank.txt")]:
+        old.unlink()  # a page that became restricted must not keep a stale render or statement text
 
     with pymupdf.open(path) as doc:
         # A scan = little text AND an image covering a good part of the page. A short
@@ -252,10 +252,18 @@ def ingest_file(path: Path, kind: str, force: bool = False) -> DocumentManifest:
             if reason is None and any(j >= len(rows) for j in policy.hidden_lines):
                 reason = "debtors"  # the debt list is inside an image: it cannot be blacked out by row
 
+            hidden = set(policy.hidden_lines)
+            if kind == "comprobantes" and bank.is_statement_page("\n".join(row_texts)):
+                # Owners' payments (who paid tells who did not) and salary/refund transfers
+                # (they name a person): blacked out. The full text is
+                # kept privately so bank.py can still check the balance.
+                hidden |= bank.private_lines(row_texts)
+                bank.private_text_path(manifest, page_no).write_text("\n".join(row_texts))
+
             rects: list[pymupdf.Rect] = []
             visible: list[str] = []
             for j, (text, rect) in enumerate(rows):
-                if j in policy.hidden_lines:
+                if j in hidden:
                     # Full page width: OCR word boxes are approximate and amounts may sit far right.
                     rects.append(pymupdf.Rect(page.rect.x0, rect.y0 - 2, page.rect.x1, rect.y1 + 2))
                 else:
@@ -272,14 +280,50 @@ def ingest_file(path: Path, kind: str, force: bool = False) -> DocumentManifest:
 
             has_qr = False
             if kind == "comprobantes":
-                found = qr.find_qr(page)
+                rejected: list[pymupdf.Rect] = []
+                found = qr.find_qr(page, rejected)
+                invoice = bool(qr.ARCA_MARKERS.search("\n".join(policy_rows)))
+                if invoice and not any(f.payload for f in found):
+                    # Small or blurry QRs on scans only show up at a higher resolution.
+                    for f in qr.find_qr(page, rejected, dpis=qr.RETRY_DPIS):
+                        same = next((g for g in found if qr.overlap(f.rect, g.rect)), None)
+                        if same is None:
+                            found.append(f)
+                        else:
+                            same.payload = same.payload or f.payload
+                barcodes = qr.find_barcodes(page)
                 has_qr = bool(found)
-                rects += [f.rect for f in found] + qr.find_barcodes(page)
+                rects += [f.rect for f in found] + barcodes
                 qr_payloads[page_no] = [f.payload for f in found if f.payload]
-                if not found and reason is None and qr.ARCA_MARKERS.search("\n".join(policy_rows)):
-                    # An electronic invoice without a located QR: its QR (a CUIT) may still be on the image.
-                    print(f"  ! {path.name} p.{page_no}: mentions a CAE but no QR was found; check the image "
-                          "(add the page to restrict.json if a QR is visible)")
+                decoded = any(f.payload for f in found)
+                # Older invoices carry the CAE as a 1D barcode instead of a QR: located = blacked out.
+                if invoice and not decoded and ((not found and not barcodes) or rejected) and reason is None:
+                    # An electronic invoice whose QR (it encodes the issuer's CUIT, a person's
+                    # CUIL for monotributistas) was not found, or may be a detection we
+                    # discarded as noise: fail closed. A reviewer can allow it in restrict.json.
+                    reason = "qr_not_located"
+                elif rejected:
+                    print(
+                        f"  ! {path.name} p.{page_no}: {len(rejected)} QR-like area(s) ignored as noise; check the image"
+                    )
+                # The CUIT printed on the invoice must be blacked out too. OCR may misread a digit
+                # (so the text mask misses it), but the QR gives it exactly: look for it on the page.
+                for f in found:
+                    fields = qr.parse_arca(f.payload)
+                    cuit = str(fields["cuit"]) if fields and fields.get("cuit") else ""
+                    if len(cuit) != 11 or cuit[:2] not in redact.PERSON_CUIT_PREFIXES:
+                        continue
+                    hits = [h for form in (cuit, f"{cuit[:2]}-{cuit[2:10]}-{cuit[10]}", f"{cuit[:2]} {cuit[2:10]} {cuit[10]}")
+                            for h in page.search_for(form)]  # fmt: skip
+                    rects += hits
+                    if (
+                        not hits
+                        and reason is None
+                        and re.search(r"C\.?\s?U\.?\s?I\.?\s?T", "\n".join(visible), re.I)
+                    ):
+                        reason = (
+                            "unlocated_identifier"  # a CUIT is printed but we cannot find the person's one
+                        )
 
             if page_no in ov.restrict:
                 reason = "manual"
@@ -295,7 +339,7 @@ def ingest_file(path: Path, kind: str, force: bool = False) -> DocumentManifest:
                 has_qr=has_qr,
                 restricted=reason is not None,
                 restricted_reason=reason,
-                hidden_lines=len(policy.hidden_lines),
+                hidden_lines=len(hidden),
                 redacted_strings=len(strings),
             )
             manifest.pages.append(rec)

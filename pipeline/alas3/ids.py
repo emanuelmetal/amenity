@@ -48,14 +48,16 @@ def ticket_ids(sha16: str, tickets: list) -> list[int]:
     """Stable receipt ids, built only from where the receipt is: never from its CUIT (a
     person's CUIL for monotributo vendors could be brute-forced back out of the published
     id) nor from fields a reviewer can edit (total), so decisions in review.json survive.
-    Fiscal vouchers: document + point of sale + number. Others: document + first page +
-    position on that page.
+    Fiscal vouchers: document + point of sale + number + first page (two small vendors in
+    one bundle can share point of sale 1 / number 123; the voucher type is left out because
+    it is missing when a QR stops decoding). Others: document + first page + position on
+    that page.
     """
     seen: Counter[tuple] = Counter()
     out: list[int] = []
     for t in tickets:
         if t.pto_vta is not None and t.nro_cmp is not None:
-            key: tuple = ("v", sha16, t.pto_vta, t.nro_cmp)
+            key: tuple = ("v", sha16, t.pto_vta, t.nro_cmp, min(t.page_nos) if t.page_nos else 0)
         else:
             key = ("p", sha16, t.page_nos[0] if t.page_nos else 0)
         out.append(stable_id("ticket", *key, seen[key]))

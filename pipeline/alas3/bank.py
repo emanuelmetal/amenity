@@ -5,13 +5,18 @@ debits prove that expense lines were paid (a transfer to the vendor, the EPEC
 direct debit) and its commissions and taxes are the "gastos bancarios" line, which
 has no other receipt.
 
-Parsed from the page text already stored in the manifest (digital PDF text, CUIL/CBU
-masked by redact.py). Fail-closed: the statement is used only when its opening
-balance plus every movement equals the closing balance and every daily "Saldo al"
-checkpoint; otherwise its pages are reported as still to transcribe.
-
-Only debits are kept one by one. Credits are owners' expensas payments and are
-kept as one total.
+Privacy (fail-closed):
+- Credit rows are owners' expensas payments (who paid, so also who did not). ingest.py
+  blacks them out on the published page (image, PDF and text) using `private_lines`, and
+  they are never stored one by one: only their total.
+- The full page text is kept privately in raw/pNNN.bank.txt (data/, never published) so
+  the balance can still be checked. Every description that leaves this module goes
+  through redact_text.
+- Transfers of salaries and refunds name a person: blacked out on the page too
+  (`private_lines`) and published as "Pago de haberes" / "Reintegro o devolución".
+- A statement is used only when opening balance + every movement equals the closing
+  balance and every daily "Saldo al" checkpoint; otherwise its pages are reported as
+  still to transcribe and nothing of it is used.
 """
 
 from __future__ import annotations
@@ -19,6 +24,7 @@ from __future__ import annotations
 import re
 from collections import defaultdict
 
+from .redact import redact_text
 from .schemas import BankItem, BankMovement, BankStatement, DocumentManifest
 
 MARKER = "RESUMEN DE CUENTA CORRIENTE"
@@ -27,16 +33,27 @@ CENT = 0.005
 CHARGE_CODES = {"127", "130", "148", "169", "170", "193", "194", "214", "222", "276"}
 _CHARGE_TEXT = re.compile(r"^(COM[.\s]|I\.V\.A|IMPUESTO LEY)")
 # Every minus sign variant seen in these PDFs (soft hyphen, hyphen, en dash, minus).
-_MINUS = "­-–−"
-_AMOUNT = rf"[{_MINUS}]?\s*\d{{1,3}}(?:\.\d{{3}})*,\d{{2}}"
+_MINUS = "\u00ad\u2013\u2212-"  # soft hyphen, en dash, minus sign, hyphen (last: literal in [ ])
+_AMOUNT = rf"[{_MINUS}]?\d{{1,3}}(?:\.\d{{3}})*,\d{{2}}"
 _DATE = r"\d{2}/\d{2}/\d{4}"
-_ROW = re.compile(rf"^(?P<fecha>{_DATE})\s{{2,}}(?P<body>.*?)\s{{2,}}(?P<importe>{_AMOUNT})\s*$")
+# A movement row, whatever the spacing between columns (PDF text may collapse it):
+# date, optional bank voucher number, concept code ("190", "F40"), description, amount.
+_ROW = re.compile(
+    rf"^(?P<fecha>{_DATE})\s+(?:(?P<comprobante>\d+)\s+)?(?P<codigo>[A-Z]?\d{{2,3}})\s+"
+    rf"(?P<desc>\S.*?)\s+(?P<importe>{_AMOUNT})\s*$"
+)
+_OPENING_ROW = re.compile(rf"^(?P<fecha>{_DATE})\s+SALDO AL INICIO\s+(?P<importe>{_AMOUNT})\s*$")
+# Any line that starts with a date and ends with an amount: used to fail closed (see row_kinds).
+_ANY_ROW = re.compile(rf"^{_DATE}\s.*?(?P<importe>{_AMOUNT})\s*$")
 _SALDO_AL = re.compile(rf"^Saldo al (?P<fecha>{_DATE})\s+(?P<importe>{_AMOUNT})\s*$")
 _HASTA = re.compile(rf"Per[ií]odo Hasta\s*:\s*(?P<fecha>{_DATE})\s+Saldo\s*:\s*(?P<importe>{_AMOUNT})")
 _DESDE = re.compile(rf"Per[ií]odo Desde\s*:\s*(?P<fecha>{_DATE})")
 _CUENTA = re.compile(r"Cuenta\s*:\s*(\S+)")
 _BANCO = re.compile(r"^(Banco [^:]+?)\s+Cuit", re.M)
-_NOT_CONTINUATION = re.compile(rf"^({_DATE}|Saldo al|Fecha |Hora |DE INTERES)")
+_OPENING = re.compile(r"\bSALDO AL INICIO\b")
+# Debits that name a person: published without the name.
+_SALARY = re.compile(r"\bHABER(ES)?\b|\bSUELDO|\bSAC\b|AGUINALDO", re.I)
+_REFUND = re.compile(r"DEVOLUC|REINTEGR|REEMBOLS", re.I)
 
 MONTHS = "ene feb mar abr may jun jul ago sep oct nov dic".split()
 
@@ -61,6 +78,60 @@ def is_statement_page(text: str) -> bool:
     return MARKER in text
 
 
+def _is_continuation(line: str) -> bool:
+    """A wrapped description ("disponible", "ALAS I", "MASUET JALIL -"): short, no digits,
+    no colon. Footer text ("Fecha de Impresión: 26/01/2026") and legal blurbs are not."""
+    return 0 < len(line) <= 40 and not re.search(r"[\d:]", line)
+
+
+def row_kinds(lines: list[str]) -> list[str | None]:
+    """What each line of a statement page is: 'credit', 'debit', 'opening', 'saldo',
+    'credit+' / 'debit+' (continuation of the row above) or None (header, footer)."""
+    out: list[str | None] = []
+    last: str | None = None
+    for raw_line in lines:
+        line = raw_line.strip()
+        kind: str | None = None
+        if _SALDO_AL.match(line):
+            kind = "saldo"
+        elif _OPENING_ROW.match(line):
+            kind = "opening"
+        elif m := _ROW.match(line) or _ANY_ROW.match(line):
+            # A dated line we cannot split into columns still counts: a credit must be
+            # blacked out even if the parser cannot read it (parse() then rejects it).
+            kind = "credit" if money(m["importe"]) > 0 else "debit"
+        elif last in ("credit", "debit") and _is_continuation(line):
+            kind = last + "+"
+        out.append(kind)
+        if kind in ("credit", "debit"):
+            last = kind
+        elif kind not in ("credit+", "debit+"):
+            last = None
+    return out
+
+
+def credit_lines(lines: list[str]) -> set[int]:
+    """Indexes of the lines that show an owner's payment (to black out on the page)."""
+    return {i for i, k in enumerate(row_kinds(lines)) if k in ("credit", "credit+")}
+
+
+def private_lines(lines: list[str]) -> set[int]:
+    """Lines to black out on a published statement page: owners' payments, and salary or
+    refund transfers (they name a person), each with its wrapped lines."""
+    out: set[int] = set()
+    hide = False
+    for i, (line, kind) in enumerate(zip(lines, row_kinds(lines), strict=True)):
+        if kind == "credit":
+            hide = True
+        elif kind == "debit":
+            hide = bool(_SALARY.search(line) or _REFUND.search(line))
+        elif kind not in ("credit+", "debit+"):
+            hide = False
+        if hide:
+            out.add(i)
+    return out
+
+
 def _clean_desc(s: str) -> str:
     s = re.sub(rf"[{_MINUS}]", "-", s)
     s = re.sub(r"\s*-\s*Dato no disponible\s*", " ", s)
@@ -72,11 +143,19 @@ def _is_charge(codigo: str | None, desc: str) -> bool:
     return codigo in CHARGE_CODES or bool(_CHARGE_TEXT.match(desc))
 
 
+def _public_desc(desc: str) -> str:
+    if _SALARY.search(desc):
+        return "Pago de haberes"
+    if _REFUND.search(desc):
+        return "Reintegro o devolución"
+    return redact_text(desc) or ""
+
+
 def parse(pages: list[tuple[int, str]]) -> BankStatement:
-    """pages: [(page_no, redacted text)] of ONE statement, in order."""
+    """pages: [(page_no, full private text)] of ONE statement, in order."""
     if not pages:
         raise StatementError("no pages")
-    head = pages[0][1]
+    head = "\n".join(t for _, t in pages)
     desde_m, hasta_m = _DESDE.search(head), _HASTA.search(head)
     if not desde_m or not hasta_m:
         raise StatementError("period or closing balance not found")
@@ -86,35 +165,28 @@ def parse(pages: list[tuple[int, str]]) -> BankStatement:
     raw: list[dict] = []  # movement rows, in order
     checkpoints: list[tuple[int, float]] = []  # (number of rows before it, balance)
     for page_no, text in pages:
+        lines = text.split("\n")
         last: dict | None = None
-        for line in text.splitlines():
+        for line, kind in zip(lines, row_kinds(lines), strict=True):
             line = line.strip()
-            if not line:
-                continue
-            if m := _SALDO_AL.match(line):
-                checkpoints.append((len(raw), money(m["importe"])))
-                last = None
-                continue
-            if m := _ROW.match(line):
-                parts = re.split(r"\s{2,}", m["body"].strip())
-                if parts == ["SALDO AL INICIO"]:
-                    saldo_inicial = money(m["importe"])
-                    last = None
-                    continue
-                if len(parts) >= 3:
-                    comprobante, codigo, desc = parts[0], parts[1], "  ".join(parts[2:])
-                elif len(parts) == 2:
-                    comprobante, codigo, desc = None, parts[0], parts[1]
-                else:
-                    raise StatementError(f"page {page_no}: unreadable row {line!r}")
-                last = {"fecha": iso(m["fecha"]), "comprobante": comprobante, "codigo": codigo,
-                        "desc": desc, "importe": money(m["importe"]), "page_no": page_no}  # fmt: skip
+            if kind == "saldo":
+                checkpoints.append((len(raw), money(_SALDO_AL.match(line)["importe"])))  # type: ignore[index]
+            elif kind == "opening":
+                if saldo_inicial is not None or raw:
+                    raise StatementError(f"page {page_no}: a second opening balance (two statements merged?)")
+                saldo_inicial = money(_OPENING_ROW.match(line)["importe"])  # type: ignore[index]
+            elif kind in ("credit", "debit"):
+                m = _ROW.match(line)
+                if not m:
+                    raise StatementError(f"page {page_no}: unreadable movement row")
+                last = {"fecha": iso(m["fecha"]), "comprobante": m["comprobante"], "codigo": m["codigo"],
+                        "desc": m["desc"], "importe": money(m["importe"]), "page_no": page_no}  # fmt: skip
                 raw.append(last)
                 continue
-            if last is not None and not _NOT_CONTINUATION.match(line):
+            elif kind in ("credit+", "debit+") and last is not None:
                 last["desc"] += " " + line  # wrapped description ("disponible", "ALAS I")
-            else:
-                last = None
+                continue
+            last = None
 
     if saldo_inicial is None:
         raise StatementError("opening balance not found")
@@ -140,13 +212,13 @@ def parse(pages: list[tuple[int, str]]) -> BankStatement:
             continue
         desc = _clean_desc(r["desc"])
         if _is_charge(r["codigo"], desc):
-            key = re.sub(r"^COM\.\s*", "COM. ", desc)
+            key = redact_text(re.sub(r"^COM\.\s*", "COM. ", desc)) or ""
             charges[key][0] += -r["importe"]
             charges[key][1] += 1
             charge_pages.add(r["page_no"])
             continue
         movements.append(BankMovement(fecha=r["fecha"], comprobante=r["comprobante"], codigo=r["codigo"],
-                                      descripcion=desc, importe=round(-r["importe"], 2), page_nos=[r["page_no"]]))  # fmt: skip
+                                      descripcion=_public_desc(desc), importe=round(-r["importe"], 2), page_nos=[r["page_no"]]))  # fmt: skip
     if charges:
         items = [BankItem(descripcion=k, importe=round(v[0], 2), cantidad=v[1])
                  for k, v in sorted(charges.items(), key=lambda kv: -kv[1][0])]  # fmt: skip
@@ -170,31 +242,46 @@ def parse(pages: list[tuple[int, str]]) -> BankStatement:
     )
 
 
+def private_text_path(m: DocumentManifest, page_no: int):
+    from .ingest import doc_dir
+
+    return doc_dir(m) / "raw" / f"p{page_no:03d}.bank.txt"
+
+
 def statements(m: DocumentManifest) -> tuple[list[BankStatement], list[int]]:
     """Statements in a document, and the statement pages that could not be verified.
 
-    Consecutive statement pages with the same period form one statement. Restricted
-    pages are never read.
+    Consecutive statement pages form one statement; a new account number or a new
+    opening balance starts another. Restricted pages are never read. The text comes
+    from the private copy ingest keeps (credit rows are blacked out on the public page).
     """
     groups: list[list[tuple[int, str]]] = []
-    prev_no, prev_key = None, None
+    failed: list[int] = []
+    prev_no, prev_cuenta = None, None
     for p in m.pages:
         if p.restricted or not is_statement_page(p.text):
             prev_no = None
             continue
-        d, h = _DESDE.search(p.text), _HASTA.search(p.text)
-        key = (d and d["fecha"], h and h["fecha"])
-        if prev_no is not None and p.page_no == prev_no + 1 and key == prev_key:
-            groups[-1].append((p.page_no, p.text))
+        path = private_text_path(m, p.page_no)
+        if not path.exists():
+            print(f"  ! {m.source_name} p.{p.page_no}: bank statement page needs `make ingest ARGS=--force`")
+            failed.append(p.page_no)
+            prev_no = None
+            continue
+        text = path.read_text()
+        c = _CUENTA.search(text)
+        cuenta = c.group(1) if c else prev_cuenta
+        starts = bool(_OPENING.search(text))
+        if prev_no is not None and p.page_no == prev_no + 1 and cuenta == prev_cuenta and not starts:
+            groups[-1].append((p.page_no, text))
         else:
-            groups.append([(p.page_no, p.text)])
-        prev_no, prev_key = p.page_no, key
+            groups.append([(p.page_no, text)])
+        prev_no, prev_cuenta = p.page_no, cuenta
     out: list[BankStatement] = []
-    failed: list[int] = []
     for g in groups:
         try:
             out.append(parse(g))
         except StatementError as e:
             print(f"  ! {m.source_name} pages {g[0][0]}-{g[-1][0]}: bank statement not verified: {e}")
             failed += [n for n, _ in g]
-    return out, failed
+    return out, sorted(failed)

@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import json
 import re
+import threading
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -132,10 +133,20 @@ def queue() -> dict:
     }  # fmt: skip
 
 
+_LOCK = threading.Lock()  # ThreadingHTTPServer: two quick clicks must not lose a decision
+
+
 def apply(action: dict) -> None:
-    """One decision from the page."""
+    """One decision from the page (serialised: each one reads, changes and writes files)."""
+    with _LOCK:
+        _apply(action)
+
+
+def _apply(action: dict) -> None:
     state = load_review()
     kind = action.get("type")
+    if kind == "link" and action.get("decision") == "verified":
+        _require_total(int(action["ticket_id"]))
     if kind == "link":
         key = f"{int(action['line_id'])}:{int(action['ticket_id'])}"
         decision = action.get("decision")
@@ -165,6 +176,20 @@ def apply(action: dict) -> None:
     save_review(state)
 
 
+def _linked(tid: int) -> bool:
+    return any(k.split(":")[1] == str(tid) and v == "verified" for k, v in load_review().links.items())
+
+
+def _require_total(tid: int) -> None:
+    """Matching ignores receipts without a total, so a decision on one would be lost silently."""
+    from .ingest import load_manifests
+    from .match import collect
+
+    _, tickets, _ = collect(load_manifests())
+    if tid not in {t.id for t in tickets}:
+        raise ValueError("Cargá el total del comprobante antes de vincularlo")
+
+
 def edit_ticket(tid: int, fields: dict) -> None:
     """Writes corrected fields into the transcription file, then re-extracts that document."""
     import math
@@ -176,6 +201,8 @@ def edit_ticket(tid: int, fields: dict) -> None:
     from .receipts import build_with_origin, load_transcription, transcription_path
     from .schemas import Ticket
 
+    if "total" in fields and fields["total"] in (None, "") and _linked(tid):
+        raise ValueError("El comprobante está vinculado a un gasto: no se puede dejar sin total")
     _, _, lookup = collect(load_manifests())
     m, _ = lookup["tickets"][tid]
     comp, origin = build_with_origin(m)
@@ -185,7 +212,9 @@ def edit_ticket(tid: int, fields: dict) -> None:
     if origin[pos] is not None:
         entry = tr.tickets[origin[pos]]
     else:  # a QR-only receipt: start a transcription entry for it
-        entry = Ticket(page_nos=built.page_nos, tipo_cmp=built.tipo_cmp, pto_vta=built.pto_vta, nro_cmp=built.nro_cmp)
+        entry = Ticket(
+            page_nos=built.page_nos, tipo_cmp=built.tipo_cmp, pto_vta=built.pto_vta, nro_cmp=built.nro_cmp
+        )
         tr.tickets.append(entry)
     for k, v in fields.items():
         if k == "total":
@@ -209,10 +238,18 @@ def dangling_decisions() -> list[str]:
     lines, tickets, _ = collect(manifests)
     mids = {mv.id for mv in collect_movements(manifests)[0]}
     lids, tids = {ln.id for ln in lines}, {t.id for t in tickets}
-    out = [f"link {k} ({v})" for k, v in state.links.items() if int(k.split(":")[0]) not in lids or int(k.split(":")[1]) not in tids]
+    out = [
+        f"link {k} ({v})"
+        for k, v in state.links.items()
+        if int(k.split(":")[0]) not in lids or int(k.split(":")[1]) not in tids
+    ]
     out += [f"verified receipt {t}" for t in state.tickets_verified if t not in tids]
     out += [f"verified line {ln}" for ln in state.lines_verified if ln not in lids]
-    out += [f"payment {k} ({v})" for k, v in state.payments.items() if int(k.split(":")[0]) not in lids or int(k.split(":")[1]) not in mids]
+    out += [
+        f"payment {k} ({v})"
+        for k, v in state.payments.items()
+        if int(k.split(":")[0]) not in lids or int(k.split(":")[1]) not in mids
+    ]
     return out
 
 

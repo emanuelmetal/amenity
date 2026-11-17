@@ -27,27 +27,39 @@ def by_line(links):
 
 
 def test_unique_exact_amount_links_automatically():
-    links = by_line(match([L(1, 48000, "MANO DE OBRA ELECTRICISTA Pérez")], [T(10, 48000, "Pérez Juan electricista")]))
+    links = by_line(
+        match([L(1, 48000, "MANO DE OBRA ELECTRICISTA Pérez")], [T(10, 48000, "Pérez Juan electricista")])
+    )
     assert [(x.ticket_id, x.status) for x in links[1]] == [(10, "auto")] and links[1][0].score >= AUTO
 
 
 def test_same_amount_twice_goes_to_review():
-    links = match([L(1, 4000, "TELEFONO"), L(2, 9999, "OTRA")], [T(10, 4000, "Recibo celular"), T(11, 4000, "Librería")])
+    links = match(
+        [L(1, 4000, "TELEFONO"), L(2, 9999, "OTRA")], [T(10, 4000, "Recibo celular"), T(11, 4000, "Librería")]
+    )
     assert by_line(links)[1][0].status == "pending"
 
 
 def test_several_receipts_sum_to_one_line_and_near_amounts_come_last():
     lines = [L(1, 123456.78, "E.P.E.C. factura"), L(2, 500000, "HONORARIOS"), L(3, 2000, "FOTOCOPIAS")]
-    tickets = [T(10, 122500.00, "EPEC energía"), T(11, 956.78, "EPEC energía"), T(12, 502000, "Administración")]
+    tickets = [
+        T(10, 122500.00, "EPEC energía"),
+        T(11, 956.78, "EPEC energía"),
+        T(12, 502000, "Administración"),
+    ]
     links = by_line(match(lines, tickets))
     assert sorted(x.ticket_id for x in links[1]) == [10, 11]  # not the bigger bill alone (within 1%)
     assert links[1][0].status == "auto"  # same vendor on every receipt of the sum
-    assert [x.ticket_id for x in links[2]] == [12] and [x.ticket_id for x in links[3]] == [12]  # one receipt, two lines
+    assert [x.ticket_id for x in links[2]] == [12] and [x.ticket_id for x in links[3]] == [
+        12
+    ]  # one receipt, two lines
     assert links[2][0].status == "pending"
 
 
 def test_receipts_from_previous_month_count_but_not_older():
-    links = by_line(match([L(1, 500, "Taxi", "2026-02")], [T(10, 500, "Taxi", "2026-01"), T(11, 500, "Taxi", "2025-11")]))
+    links = by_line(
+        match([L(1, 500, "Taxi", "2026-02")], [T(10, 500, "Taxi", "2026-01"), T(11, 500, "Taxi", "2025-11")])
+    )
     assert [x.ticket_id for x in links[1]] == [10]
 
 
@@ -137,7 +149,9 @@ def test_confirmed_receipt_keeps_its_remainder_for_other_lines():
 
 
 def test_manual_link_with_any_amount_is_kept():
-    links = match([L(1, 2000, "FOTOCOPIAS")], [T(10, 502000, "Administración")], ReviewState(links={"1:10": "verified"}))
+    links = match(
+        [L(1, 2000, "FOTOCOPIAS")], [T(10, 502000, "Administración")], ReviewState(links={"1:10": "verified"})
+    )
     assert [(x.line_id, x.ticket_id, x.status) for x in links] == [(1, 10, "verified")]
 
 
@@ -145,3 +159,36 @@ def test_unique_amount_alone_is_not_enough_for_auto():
     """Review L5: same amount but nothing else in common -> review, not auto."""
     [x] = match([L(1, 4321, "ABONO MENSUAL", sub="Seguros")], [T(10, 4321, "Kiosco", sub="Limpieza")])
     assert x.status == "pending"
+
+
+def test_review_decisions_on_receipts_without_total_are_refused(data_dir, monkeypatch):
+    """Review: matching ignores receipts without a total, so a decision on one would be lost."""
+    from alas3 import review
+
+    monkeypatch.setattr("alas3.ingest.load_manifests", lambda: [])
+    monkeypatch.setattr("alas3.match.collect", lambda _m: ([], [T(5, 100, "x")], {}))
+    with pytest.raises(ValueError, match="total"):
+        review.apply({"type": "link", "line_id": 1, "ticket_id": 6, "decision": "verified"})
+    review.apply({"type": "link", "line_id": 1, "ticket_id": 5, "decision": "verified"})
+    review.apply({"type": "link", "line_id": 2, "ticket_id": 6, "decision": "rejected"})  # rejecting is fine
+    with pytest.raises(ValueError, match="sin total"):
+        review.edit_ticket(5, {"total": ""})
+    assert review.load_review().links == {"1:5": "verified", "2:6": "rejected"}
+
+
+def test_concurrent_review_decisions_are_all_kept(data_dir):
+    """Review: the server is threaded; read-modify-write of review.json must not lose clicks."""
+    from alas3 import review
+
+    threads = [
+        threading.Thread(
+            target=review.apply,
+            args=({"type": "payment", "line_id": i, "movement_id": 7, "decision": "verified"},),
+        )
+        for i in range(1, 31)
+    ]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+    assert len(review.load_review().payments) == 30
