@@ -312,7 +312,36 @@ def queue() -> dict:
         "rejected": len(state.rejected_pairs()) + sum(1 for v in state.payments.values() if v == "rejected"),
         "reject_reasons": list(REJECT_REASONS),
         "rejections": rejections(state, line_json, ticket_json, movement_json, lookup, mlookup),
+        "actas": actas_json(state, lookup["lines"]),
     }  # fmt: skip
+
+
+def actas_json(state: ReviewState, lines: dict) -> list[dict]:
+    """The transcribed actas (actas.py) next to their folio photos, for the owner to check the
+    transcription and the gastos it links to (`actas_verified`)."""
+    from .actas import load_book
+
+    book = load_book()
+    out = []
+    for a in sorted(book.actas, key=lambda a: a.fecha):
+        items = []
+        for it in a.items:
+            gastos = []
+            for lid in it.gastos:
+                if lid in lines:
+                    m, ln = lines[lid]
+                    gastos.append({"id": str(lid), "period": m.period, "concepto": ln.concepto, "detalle": ln.detalle,
+                                   "importe": ln.importe})  # fmt: skip
+                else:
+                    gastos.append({"id": str(lid), "missing": True})
+            items.append({**it.model_dump(exclude={"gastos"}), "gastos": gastos})
+        out.append({
+            "key": a.key, "numero": a.numero, "fecha": a.fecha, "tipo": a.tipo, "resumen": a.resumen,
+            "asistentes": a.asistentes, "items": items, "verified": a.verified or a.key in state.actas_verified,
+            "folios": [{"doc": k.split("#")[0], "page": int(k.split("#")[1]) if "#" in k else 1,
+                        "folio": book.folios[k].folio, "texto": book.folios[k].texto} for k in a.folios],
+        })  # fmt: skip
+    return out
 
 
 def month_status(
@@ -459,6 +488,16 @@ def _apply(action: dict) -> None:
             state.closed_months = sorted([*state.closed_months, period])
         elif not action.get("closed") and period in state.closed_months:
             state.closed_months.remove(period)
+    elif kind == "acta":
+        from .actas import load_book
+
+        key = str(action.get("key") or "")
+        if key not in {a.key for a in load_book().actas}:
+            raise ValueError(f"unknown acta {key!r}")
+        if action.get("verified") and key not in state.actas_verified:
+            state.actas_verified.append(key)
+        elif not action.get("verified") and key in state.actas_verified:
+            state.actas_verified.remove(key)
     elif kind == "edit":
         edit_ticket(int(action["id"]), {k: v for k, v in action.get("fields", {}).items() if k in EDITABLE})
         return

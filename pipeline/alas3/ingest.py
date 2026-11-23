@@ -402,12 +402,17 @@ def ingest_file(path: Path, kind: str, force: bool = False) -> DocumentManifest:
 
 
 def inbox_files() -> list[tuple[Path, str]]:
-    """(path, kind) for every PDF in data/inbox/<kind folder>/ and in data/inbox/ itself."""
+    """(path, kind) for every PDF in data/inbox/<kind folder>/ and in data/inbox/ itself,
+    plus the photos in data/inbox/actas/."""
+    from .actas import IMAGE_SUFFIXES
+
     found: list[tuple[Path, str]] = []
     for folder, kind in KIND_MAP.items():
         d = INBOX / folder
         if d.is_dir():
             found += [(p, kind) for p in sorted(d.glob("*.pdf"))]
+            if kind == "acta":  # photos of the handwritten book (actas.py)
+                found += [(p, kind) for p in sorted(d.iterdir()) if p.suffix.lower() in IMAGE_SUFFIXES]
     found += [(p, classify_name(p.name)) for p in sorted(INBOX.glob("*.pdf"))]
     return found
 
@@ -425,6 +430,14 @@ def ingest_all(force: bool = False) -> list[DocumentManifest]:
         seen.add(sha)
         if kind not in PHASE_KINDS:
             print(f"  skip {kind:12} {path.name} (not in this phase)")
+            continue
+        if kind == "acta":
+            from .actas import ingest_pdf, ingest_photo
+
+            m = ingest_pdf(path, force=force) if path.suffix.lower() == ".pdf" else ingest_photo(path, force=force)
+            todo = sum(1 for p in m.pages if p.restricted)
+            print(f"  {kind:12} {path.name}: {m.title}" + (f", {todo} pages private" if todo else ""))
+            manifests.append(m)
             continue
         m = ingest_file(path, kind, force=force)
         reasons: dict[str, int] = {}

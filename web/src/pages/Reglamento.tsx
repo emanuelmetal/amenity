@@ -2,6 +2,7 @@ import { useQuery } from "@tanstack/react-query";
 import { FileText } from "lucide-react";
 import { useMemo, useState } from "react";
 import { Link, NavLink, useParams } from "react-router";
+import { Comments } from "../components/Comments";
 import { PageViewer } from "../components/PageViewer";
 import { Button, Card, Empty, ErrorBox, Input, Loading, PageHeader, StatusTag } from "../components/ui";
 import { api, type Article, type ArticleIndex } from "../lib/api";
@@ -42,6 +43,7 @@ function ArticleView({ id }: { id: string }) {
           ))}
         </div>
       )}
+      <Comments entityType="article" entityId={a.id} />
     </article>
   );
 }

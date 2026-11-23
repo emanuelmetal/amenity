@@ -38,3 +38,10 @@ export const TICKET_KIND_LABEL: Record<string, string> = {
   factura: "Factura", recibo: "Recibo", presupuesto: "Presupuesto", ticket: "Ticket", servicio: "Servicio",
   nota_credito: "Nota de crédito", nota_debito: "Nota de débito", otro: "Otro",
 };
+
+/** SQLite UTC timestamp `2026-11-23 17:05:00` → `23 nov 2026, 14:05` (local time). */
+export function formatTimestamp(ts: string): string {
+  const d = new Date(`${ts.replace(" ", "T")}Z`);
+  if (Number.isNaN(d.getTime())) return ts;
+  return `${formatDate(d)}, ${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}`;
+}

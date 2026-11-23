@@ -1,5 +1,7 @@
 /** Read-only JSON API (Phase 1). Every route runs behind `gate()` in worker.ts. */
 import { Hono } from "hono";
+import { ask } from "./ask";
+import { comments } from "./comments";
 import type { Env, SessionData } from "./env";
 
 type Bindings = Env & { session: SessionData };
@@ -35,7 +37,7 @@ const LACKS_RECEIPT = (e: string) => `(NOT ${HAS_RECEIPT(e)} AND ${RECEIPTS_FOR(
 const LACKS_PAYMENT = (e: string) => `(NOT ${HAS_PAYMENT(e)} AND ${STATEMENT_FOR(e)})`;
 /** A line is backed when it has a receipt AND a bank payment, each one required only when that
  *  kind of evidence was uploaded for its month; and at least one of them. `e` = expense_lines alias. */
-const BACKED = (e: string) =>
+export const BACKED = (e: string) =>
   `((${HAS_RECEIPT(e)} OR ${HAS_PAYMENT(e)}) AND NOT ${LACKS_RECEIPT(e)} AND NOT ${LACKS_PAYMENT(e)})`;
 /** Periods with uploaded evidence (receipts or a bank statement): only there "sin comprobante" means something. */
 const EVIDENCE_PERIODS = `${RECEIPT_PERIODS} UNION ${PAYMENT_PERIODS}`;
@@ -186,7 +188,14 @@ api.get("/expenses/:id", async (c) => {
       pages: await publicPages(c.env, page_ids_json),
     })),
   );
-  return c.json({ ...row, tickets, payments });
+  const { results: actas } = await c.env.DB.prepare(
+    `SELECT a.id AS acta_id, a.numero, a.fecha, i.id, i.tipo, i.texto, i.importe
+     FROM acta_expense_links x JOIN acta_items i ON i.id = x.acta_item_id JOIN actas a ON a.id = i.acta_id
+     WHERE x.expense_line_id = ?1 ORDER BY a.fecha, i.orden`,
+  )
+    .bind(c.req.param("id"))
+    .all();
+  return c.json({ ...row, tickets, payments, actas });
 });
 
 // ---- Receipts (comprobantes) -------------------------------------------------
@@ -527,5 +536,79 @@ api.get("/files/doc/:id", async (c) => {
   if (!row) return c.json({ error: "not_found" }, 404);
   return streamObject(c.env, row.r2_key_pdf, "application/pdf", `${row.title}.pdf`);
 });
+
+// ---- Actas (minutes book, pipeline/alas3/actas.py) --------------------------------
+
+api.get("/actas", async (c) => {
+  const [actas, items] = await c.env.DB.batch([
+    c.env.DB.prepare(
+      `SELECT id, numero, fecha, tipo, resumen, verified FROM actas ORDER BY fecha DESC, numero DESC`,
+    ),
+    c.env.DB.prepare(
+      `SELECT i.acta_id, i.id, i.tipo, i.texto, i.importe FROM acta_items i ORDER BY i.acta_id, i.orden`,
+    ),
+  ]);
+  const byActa = new Map<unknown, Record<string, unknown>[]>();
+  for (const { acta_id, ...it } of items.results as Record<string, unknown>[]) {
+    byActa.set(acta_id, [...(byActa.get(acta_id) ?? []), it]);
+  }
+  return c.json(
+    (actas.results as Record<string, unknown>[]).map((a) => ({ ...a, items: byActa.get(a.id) ?? [] })),
+  );
+});
+
+api.get("/actas/:id", async (c) => {
+  const id = c.req.param("id");
+  const acta = await c.env.DB.prepare(
+    `SELECT id, numero, fecha, tipo, resumen, asistentes_json, page_ids_json, verified FROM actas WHERE id = ?1`,
+  )
+    .bind(id)
+    .first<{ asistentes_json: string; page_ids_json: string } & Record<string, unknown>>();
+  if (!acta) return c.json({ error: "not_found" }, 404);
+  const [items, lines, obs] = await c.env.DB.batch([
+    c.env.DB.prepare(
+      `SELECT id, orden, tipo, texto, importe, period_id FROM acta_items WHERE acta_id = ?1 ORDER BY orden`,
+    ).bind(id),
+    c.env.DB.prepare(
+      `SELECT x.acta_item_id AS item, e.id, e.period_id, e.rubro, e.concepto, e.detalle, e.importe
+       FROM acta_items i JOIN acta_expense_links x ON x.acta_item_id = i.id JOIN expense_lines e ON e.id = x.expense_line_id
+       WHERE i.acta_id = ?1 ORDER BY e.period_id, e.importe DESC`,
+    ).bind(id),
+    c.env.DB.prepare(
+      `SELECT i.id AS item, o.id, o.titulo, o.estado
+       FROM acta_items i, json_each(i.observation_ids_json) j JOIN observations o ON o.id = j.value
+       WHERE i.acta_id = ?1`,
+    ).bind(id),
+  ]);
+  const group = (rows: Record<string, unknown>[]) => {
+    const m = new Map<unknown, Record<string, unknown>[]>();
+    for (const { item, ...rest } of rows) m.set(item, [...(m.get(item) ?? []), rest]);
+    return m;
+  };
+  const gl = group(lines.results as Record<string, unknown>[]);
+  const go = group(obs.results as Record<string, unknown>[]);
+  const { asistentes_json, page_ids_json, ...rest } = acta;
+  return c.json({
+    ...rest,
+    asistentes: JSON.parse(asistentes_json) as string[],
+    // Reading order of the folios, restricted ones dropped.
+    pages: await orderedPublicPages(c.env, page_ids_json),
+    items: (items.results as Record<string, unknown>[]).map((it) => ({
+      ...it,
+      gastos: gl.get(it.id) ?? [],
+      observaciones: go.get(it.id) ?? [],
+    })),
+  });
+});
+
+async function orderedPublicPages(env: Env, json: string) {
+  const ids = (JSON.parse(json) as unknown[]).filter((x): x is number => Number.isInteger(x)).slice(0, 50);
+  const pages = await publicPages(env, json);
+  const pos = new Map(ids.map((id, i) => [id, i]));
+  return pages.sort((a, b) => (pos.get(a.id) ?? 0) - (pos.get(b.id) ?? 0));
+}
+
+api.route("/", comments);
+api.route("/ask", ask);
 
 api.all("*", (c) => c.json({ error: "not_found" }, 404));

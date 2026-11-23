@@ -340,16 +340,81 @@ class Comprobantes(BaseModel):
     cheques: list[Cheque] = Field(default_factory=list)
 
 
+ACTA_KINDS = ("comision", "asamblea", "otro")
+# A photo of the book: its sha16. A page of a scanned PDF (asamblea actas): "<sha16>#<page>".
+FOLIO_KEY = r"^[0-9a-f]{16}(#[1-9]\d{0,2})?$"
+
+
+class ActaFolio(BaseModel):
+    """One photo of the handwritten minutes book (data/inbox/actas/*.jpeg), or one page of a
+    scanned acta PDF."""
+
+    model_config = ConfigDict(extra="forbid")
+    folio: int | None = Field(default=None, ge=1)  # the number printed on a book page
+    # Everything the page says, people by role only ("una integrante de la comisión",
+    # "el administrador"); companies keep their names. Published and searchable.
+    texto: str = Field(min_length=1)
+    # PDF pages only: areas blacked out on the published image (DNI, address, barcodes, QR).
+    # Book photos are published as photographed (owner decision 2026-11-23).
+    checked: list[Blackout] = Field(default_factory=list)
+
+
 class ActaItem(BaseModel):
+    model_config = ConfigDict(extra="forbid")
     tipo: Literal["decision", "tarea", "tema"]
-    texto: str
+    texto: str = Field(min_length=1, max_length=2000)
     importe: float | None = None
+    period: str | None = Field(default=None, pattern=r"^\d{4}-(0[1-9]|1[0-2])$")  # month it is about
+    gastos: list[int] = Field(default_factory=list)  # expense line ids (ids.expense_line_ids)
+    observaciones: list[str] = Field(default_factory=list)  # Observation ids
 
 
 class Acta(BaseModel):
-    fecha: str
-    resumen: str | None = None
+    """One acta of the book; it may run across several folios (in order)."""
+
+    model_config = ConfigDict(extra="forbid")
+    numero: int | None = Field(default=None, ge=1)  # "Acta 101"
+    fecha: str = Field(pattern=r"^\d{4}-\d{2}-\d{2}$")
+    tipo: Literal[ACTA_KINDS] = "comision"  # type: ignore[valid-type]
+    folios: list[str] = Field(min_length=1)  # sha16 of each photo, in reading order
+    resumen: str = Field(min_length=1, max_length=4000)  # roles only
+    asistentes: list[str] = Field(default_factory=list)  # roles only: "4 integrantes de la comisión"
     items: list[ActaItem] = Field(default_factory=list)
+    verified: bool = False
+
+    @property
+    def key(self) -> str:
+        return str(self.numero) if self.numero else self.fecha
+
+
+class ActaBook(BaseModel):
+    """data/work/extract/actas.json: transcription of the minutes book (Claude Code reads
+    the photos). One file for the whole book, because an acta crosses photos."""
+
+    model_config = ConfigDict(extra="forbid")
+    folios: dict[str, ActaFolio] = Field(default_factory=dict)  # FOLIO_KEY -> page
+    actas: list[Acta] = Field(default_factory=list)
+    titulos: dict[str, str] = Field(default_factory=dict)  # sha16 of a PDF -> document title
+
+    @model_validator(mode="after")
+    def _check(self) -> ActaBook:
+        import re
+
+        bad = [k for k in self.folios if not re.fullmatch(FOLIO_KEY, k)]
+        if bad:
+            raise ValueError(f"folio keys must be '<sha16>' or '<sha16>#<page>': {bad}")
+        bad = [k for k, f in self.folios.items() if f.checked and "#" not in k]
+        if bad:
+            raise ValueError(f"book photos are published as photographed, no `checked`: {bad}")
+        for a in self.actas:
+            missing = [f for f in a.folios if f not in self.folios]
+            if missing:
+                raise ValueError(f"acta {a.key}: folios not transcribed: {missing}")
+        keys = [a.key for a in self.actas]
+        dup = {k for k in keys if keys.count(k) > 1}
+        if dup:
+            raise ValueError(f"duplicated actas: {sorted(dup)}")
+        return self
 
 
 REJECT_REASONS = (
@@ -442,6 +507,8 @@ class ReviewState(BaseModel):
     # "<line_id>:receipt" / "<line_id>:payment" -> a small difference accepted by hand: that
     # side shows as complete in the review while the missing amount stays within it.
     accepted_diffs: dict[str, AcceptedDiff] = Field(default_factory=dict)
+    # Actas (ActaBook, by Acta.key) the owner checked against the folio photos.
+    actas_verified: list[str] = Field(default_factory=list)
 
     def _pairs(self, decision: str) -> set[tuple[int, int]]:
         out = set()

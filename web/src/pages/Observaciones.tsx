@@ -1,6 +1,7 @@
 import { useQuery } from "@tanstack/react-query";
 import { useState } from "react";
 import { useSearchParams } from "react-router";
+import { Comments } from "../components/Comments";
 import { ReceiptDetail } from "../components/ReceiptDetail";
 import { Card, Empty, ErrorBox, Loading, MultiSelect, PageHeader, Select, SidePanel } from "../components/ui";
 import { api, type Observation, type ObservationState } from "../lib/api";
@@ -26,6 +27,7 @@ function StateTag({ estado }: { estado: ObservationState }) {
 }
 
 function ObservationCard({ o, onLine, onTicket }: { o: Observation; onLine: (id: number) => void; onTicket: (id: number) => void }) {
+  const [showComments, setShowComments] = useState(false);
   return (
     <Card>
       <div className="space-y-3">
@@ -102,6 +104,10 @@ function ObservationCard({ o, onLine, onTicket }: { o: Observation; onLine: (id:
             <p className="whitespace-pre-line text-gray-700">{o.respuesta}</p>
           </div>
         )}
+        <details onToggle={(e) => setShowComments(e.currentTarget.open)}>
+          <summary className="cursor-pointer text-sm text-primary">Comentarios de los vecinos</summary>
+          {showComments && <div className="pt-2"><Comments entityType="observation" entityId={o.id} /></div>}
+        </details>
       </div>
     </Card>
   );

@@ -20,14 +20,23 @@ import json
 from pathlib import Path
 
 from . import wrangler
+from .actas import load_book
 from .classify import classify_text
 from .config import OUT, PHASE_KINDS, REPO, WORK
 from .extract import load_extract
-from .ids import expense_line_ids, ticket_ids
+from .ids import acta_id, acta_item_ids, article_ids, expense_line_ids, ticket_ids
 from .ingest import doc_dir, load_manifests
 from .match import AUTO, collect, collect_movements, match, match_payments
 from .redact import redact_text
-from .schemas import Comprobantes, DocumentManifest, Liquidacion, ObservationLog, Reglamento, ReviewState
+from .schemas import (
+    ActaBook,
+    Comprobantes,
+    DocumentManifest,
+    Liquidacion,
+    ObservationLog,
+    Reglamento,
+    ReviewState,
+)
 
 
 def q(v: object) -> str:
@@ -84,12 +93,16 @@ def build_sql(
     manifests: list[DocumentManifest],
     review: ReviewState | None = None,
     observations: ObservationLog | None = None,
+    book: ActaBook | None = None,
 ) -> str:
     """`review`: human decisions from review.json (verified lines/receipts, link decisions).
-    `observations`: the auditor's log; None leaves the published observations as they are."""
+    `observations`: the auditor's log; None leaves the published observations as they are.
+    `book`: the actas transcription (actas.py); None reads data/work/extract/actas.json."""
+    book = book if book is not None else load_book()
     review = review or ReviewState()
     verified_lines = set(review.lines_verified)
     stmts: list[str] = []
+    published_lines: set[int] = set()
     for m in publishable(manifests):
         stmts.append(
             "INSERT INTO documents (id, kind, period, title, r2_key_pdf, sha256, pages) VALUES "
@@ -126,6 +139,7 @@ def build_sql(
             # Stable ids (ids.py): upsert, then drop the lines that disappeared, so links
             # and review decisions on unchanged lines survive a re-ingest.
             line_ids = expense_line_ids(ext)
+            published_lines |= set(line_ids)
             for lid, ln in zip(line_ids, ext.lines, strict=True):
                 page_id = m.page_id(ln.page_no) if ln.page_no else None
                 verified = ln.verified or lid in verified_lines
@@ -145,16 +159,25 @@ def build_sql(
                 f"AND id NOT IN ({','.join(map(str, line_ids)) or 'NULL'});"
             )
         elif isinstance(ext, Reglamento):
-            stmts.append(f"DELETE FROM reglamento_articles WHERE document_id = {m.id};")
-            for a in ext.articles:
+            # Stable ids (comments point at articles): upsert, then drop the ones that disappeared.
+            aids = article_ids(m.work_dir_name, ext.articles)
+            for aid, a in zip(aids, ext.articles, strict=True):
                 page_ids = [m.page_id(n) for n in a.page_nos]
                 stmts.append(
-                    "INSERT INTO reglamento_articles (document_id, numero, orden, titulo, texto, page_ids_json, "
+                    "INSERT INTO reglamento_articles (id, document_id, numero, orden, titulo, texto, page_ids_json, "
                     "verified) VALUES "
-                    f"({m.id}, {qr(a.numero)}, {a.orden}, {qr(a.titulo)}, {qr(a.texto)}, "
-                    f"{q(json.dumps(page_ids))}, {q(a.verified)});"
+                    f"({aid}, {m.id}, {qr(a.numero)}, {a.orden}, {qr(a.titulo)}, {qr(a.texto)}, "
+                    f"{q(json.dumps(page_ids))}, {q(a.verified)}) "
+                    "ON CONFLICT(id) DO UPDATE SET document_id=excluded.document_id, numero=excluded.numero, "
+                    "orden=excluded.orden, titulo=excluded.titulo, texto=excluded.texto, "
+                    "page_ids_json=excluded.page_ids_json, verified=excluded.verified;"
                 )
+            stmts.append(
+                f"DELETE FROM reglamento_articles WHERE document_id = {m.id} "
+                f"AND id NOT IN ({','.join(map(str, aids)) or 'NULL'});"
+            )
     stmts += _receipts_sql(publishable(manifests), review)
+    stmts += _actas_sql(publishable(manifests), review, published_lines, book)
 
     # Sweep: anything published before that is not in the current set goes away.
     ids = ",".join(str(m.id) for m in publishable(manifests)) or "NULL"
@@ -169,6 +192,51 @@ def build_sql(
         stmts += _observations_sql(observations)
     stmts.append((REPO / "db" / "rebuild_fts.sql").read_text())
     return "\n".join(stmts) + "\n"
+
+
+def _actas_sql(
+    manifests: list[DocumentManifest], review: ReviewState, lines: set[int], book: ActaBook
+) -> list[str]:
+    """Actas and their items, replaced in full (stable ids, so comments on an acta survive).
+    Only folios whose photo is published are referenced; links to expense lines that are not
+    published (any more) are dropped with a warning. Never touches the comment tables."""
+    stmts = ["DELETE FROM acta_expense_links;", "DELETE FROM acta_items;", "DELETE FROM actas;"]
+    from .actas import folio_key
+
+    pages = {
+        folio_key(m, p.page_no): m.page_id(p.page_no)
+        for m in manifests
+        if m.kind == "acta"
+        for p in m.pages
+        if not p.restricted
+    }
+    verified = set(review.actas_verified)
+    for a in book.actas:
+        page_ids = [pages[k] for k in a.folios if k in pages]
+        if not page_ids:
+            print(f"  ! acta {a.key}: none of its folios is published; skipped")
+            continue
+        aid = acta_id(a)
+        stmts.append(
+            "INSERT INTO actas (id, numero, fecha, tipo, resumen, asistentes_json, page_ids_json, verified) VALUES "
+            f"({aid}, {q(a.numero)}, {q(a.fecha)}, {q(a.tipo)}, {qr(a.resumen)}, "
+            f"{q(json.dumps([redact_text(x) for x in a.asistentes], ensure_ascii=False))}, "
+            f"{q(json.dumps(page_ids))}, {q(a.verified or a.key in verified)});"
+        )
+        for orden, (iid, it) in enumerate(zip(acta_item_ids(a), a.items, strict=True), start=1):
+            stmts.append(
+                "INSERT INTO acta_items (id, acta_id, orden, tipo, texto, importe, period_id, observation_ids_json) VALUES "
+                f"({iid}, {aid}, {orden}, {q(it.tipo)}, {qr(it.texto)}, {q(it.importe)}, {q(it.period)}, "
+                f"{q(json.dumps(it.observaciones))});"
+            )
+            for lid in dict.fromkeys(it.gastos):
+                if lid not in lines:
+                    print(f"  ! acta {a.key}, item {orden}: expense line {lid} is not published; link dropped")
+                    continue
+                stmts.append(
+                    f"INSERT INTO acta_expense_links (acta_item_id, expense_line_id) VALUES ({iid}, {lid});"
+                )
+    return stmts
 
 
 def _receipts_sql(manifests: list[DocumentManifest], review: ReviewState) -> list[str]:
@@ -358,6 +426,9 @@ def publish(local: bool) -> None:
         build_sql(manifests, sync_cheque_decisions(collect_movements(manifests)[1]), load_observations())
     )
     wrangler.d1_file(sql_path, local)
+    from .ask_sync import sync
+
+    sync(local)  # "Preguntale al portal" reads only this copy of the ask_* views
 
     # 3. everything uploaded before that is no longer published (restricted pages, dropped documents)
     to_delete = sorted(k for k in state if k not in expected)

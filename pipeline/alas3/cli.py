@@ -40,6 +40,9 @@ def cmd_ingest(args: argparse.Namespace) -> int:
                       f"(pages {st.page_nos[0]}-{st.page_nos[-1]})")  # fmt: skip
         elif result is not None:
             print(f"  {m.source_name}: {len(result.articles)} articles")  # type: ignore[attr-defined]
+    from .actas import report
+
+    print("\n".join(report(manifests)))
     return 0
 
 

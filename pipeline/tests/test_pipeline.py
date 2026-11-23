@@ -123,9 +123,11 @@ def test_only_phase_kinds_are_ingested_and_published(data_dir):
     from alas3 import ingest, publish
 
     make_pdf(data_dir / "inbox/039_20250922102519_Circulares Varias.pdf", [["Circular con datos de vecinos"]])
-    make_pdf(data_dir / "inbox/acta_2026-09-15.pdf", [["Acta de la comision"]])  # Phase 3
-    assert ingest.ingest_all() == []
-    assert "Circular" not in publish.build_sql(ingest.load_manifests())
+    make_pdf(data_dir / "inbox/acta_2026-09-15.pdf", [["Acta de la comision"]])
+    [m] = ingest.ingest_all()  # an acta is ingested, but private until transcribed (actas.py)
+    assert m.kind == "acta" and m.pages[0].restricted_reason == "untranscribed"
+    sql = publish.build_sql(ingest.load_manifests())
+    assert "Circular" not in sql and "Acta de la comision" not in sql
 
 
 def test_publish_sql_redacted_and_per_document(data_dir):
@@ -183,6 +185,9 @@ def test_publish_reuploads_changed_files_and_deletes_restricted_renders(data_dir
     monkeypatch.setattr(publish.wrangler, "r2_put", lambda key, *a: calls.append(("put", key)))
     monkeypatch.setattr(publish.wrangler, "r2_delete", lambda key, *a: calls.append(("delete", key)))
     monkeypatch.setattr(publish.wrangler, "d1_file", lambda *a: calls.append(("d1", "")))
+    from alas3 import ask_sync
+
+    monkeypatch.setattr(ask_sync, "sync", lambda local: calls.append(("ask", "")))
 
     pdf = make_pdf(
         data_dir / "inbox/reglamento/r.pdf",
@@ -197,7 +202,7 @@ def test_publish_reuploads_changed_files_and_deletes_restricted_renders(data_dir
 
     calls.clear()
     publish.publish(local=True)  # nothing changed: nothing re-sent
-    assert [c for c in calls if c[0] != "d1"] == []
+    assert [c for c in calls if c[0] not in ("d1", "ask")] == []
 
     # A reviewer restricts page 2 later: the PDF must be re-sent and the render removed, after D1.
     sha16 = ingest.sha256_file(pdf)[:16]
@@ -205,7 +210,7 @@ def test_publish_reuploads_changed_files_and_deletes_restricted_renders(data_dir
     [m] = ingest.ingest_all(force=True)
     calls.clear()
     publish.publish(local=True)
-    assert calls == [("put", publish.pdf_key(m)), ("d1", ""), ("delete", publish.page_key(m, 2))]
+    assert calls == [("put", publish.pdf_key(m)), ("d1", ""), ("ask", ""), ("delete", publish.page_key(m, 2))]
 
 
 def test_period_and_kind_from_real_file_names():
