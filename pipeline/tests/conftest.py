@@ -17,6 +17,7 @@ def data_dir(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
 
     importlib.reload(config)
     for mod in (
+        "alas3.actas",
         "alas3.ingest",
         "alas3.receipts",
         "alas3.extract",

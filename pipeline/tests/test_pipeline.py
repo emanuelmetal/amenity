@@ -123,9 +123,11 @@ def test_only_phase_kinds_are_ingested_and_published(data_dir):
     from alas3 import ingest, publish
 
     make_pdf(data_dir / "inbox/039_20250922102519_Circulares Varias.pdf", [["Circular con datos de vecinos"]])
-    make_pdf(data_dir / "inbox/acta_2026-09-15.pdf", [["Acta de la comision"]])  # Phase 3
-    assert ingest.ingest_all() == []
-    assert "Circular" not in publish.build_sql(ingest.load_manifests())
+    make_pdf(data_dir / "inbox/acta_2026-09-15.pdf", [["Acta de la comision"]])
+    [m] = ingest.ingest_all()  # an acta is ingested, but private until transcribed (actas.py)
+    assert m.kind == "acta" and m.pages[0].restricted_reason == "untranscribed"
+    sql = publish.build_sql(ingest.load_manifests())
+    assert "Circular" not in sql and "Acta de la comision" not in sql
 
 
 def test_publish_sql_redacted_and_per_document(data_dir):

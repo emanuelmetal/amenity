@@ -1,5 +1,5 @@
 import { useQuery } from "@tanstack/react-query";
-import { BookOpen, FileText, Paperclip, Receipt } from "lucide-react";
+import { BookOpen, FileText, NotebookPen, Paperclip, Receipt } from "lucide-react";
 import { useEffect, useState, type FormEvent } from "react";
 import { Link, useSearchParams } from "react-router";
 import { Button, Card, Empty, ErrorBox, Input, Loading, PageHeader, Snippet } from "../components/ui";
@@ -9,11 +9,12 @@ function hitLink(h: SearchHit): string {
   if (h.entity_type === "article") return `/reglamento/${h.entity_id}`;
   if (h.entity_type === "expense") return `/gastos?q=${encodeURIComponent(h.title)}`;
   if (h.entity_type === "ticket") return `/comprobantes?id=${h.entity_id}`;
+  if (h.entity_type === "acta") return `/actas/${h.entity_id}`;
   return h.page_id ? `/paginas/${h.page_id}` : "#";
 }
 
-const ICON = { article: <BookOpen size={16} />, expense: <Receipt size={16} />, ticket: <Paperclip size={16} />, page: <FileText size={16} />, acta_item: <FileText size={16} /> };
-const KIND = { article: "Reglamento", expense: "Gasto", ticket: "Comprobante", page: "Documento", acta_item: "Acta" };
+const ICON = { article: <BookOpen size={16} />, expense: <Receipt size={16} />, ticket: <Paperclip size={16} />, page: <FileText size={16} />, acta: <NotebookPen size={16} /> };
+const KIND = { article: "Reglamento", expense: "Gasto", ticket: "Comprobante", page: "Documento", acta: "Acta" };
 
 export default function Buscar() {
   const [params, setParams] = useSearchParams();
@@ -27,7 +28,7 @@ export default function Buscar() {
   };
   return (
     <>
-      <PageHeader title="Buscar" subtitle="En el reglamento, las liquidaciones y sus páginas escaneadas." />
+      <PageHeader title="Buscar" subtitle="En el reglamento, las liquidaciones, los comprobantes, las actas y sus páginas." />
       <form onSubmit={submit} className="flex max-w-xl gap-2">
         <Input value={text} onChange={(e) => setText(e.target.value)} placeholder="Ej.: mascotas, pintura, ascensor" className="flex-1" autoFocus />
         <Button variant="primary" type="submit">Buscar</Button>

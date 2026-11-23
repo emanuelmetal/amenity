@@ -19,6 +19,31 @@ export async function api<T>(path: string, params?: Record<string, Param | Param
   return res.json() as Promise<T>;
 }
 
+/** Writes (comments). The browser adds the Origin header the server checks. */
+export async function send<T>(method: "POST" | "DELETE", path: string, body?: unknown): Promise<T> {
+  const res = await fetch(`/api${path}`, {
+    method,
+    credentials: "same-origin",
+    headers: body === undefined ? {} : { "Content-Type": "application/json" },
+    body: body === undefined ? undefined : JSON.stringify(body),
+  });
+  if (res.status === 401) window.location.reload();
+  if (!res.ok) {
+    const err = new ApiError(res.status);
+    try {
+      (err as ApiError & { code?: string }).code = ((await res.json()) as { error?: string }).error;
+    } catch {
+      /* not JSON */
+    }
+    throw err;
+  }
+  return res.json() as Promise<T>;
+}
+
+export interface Me {
+  kind: "shared" | "unit" | "admin";
+}
+
 export const pageImageUrl = (pageId: number) => `/api/files/page/${pageId}`;
 export const documentPdfUrl = (documentId: number, pageNo?: number) =>
   `/api/files/doc/${documentId}${pageNo ? `#page=${pageNo}` : ""}`;
@@ -84,6 +109,7 @@ export interface ExpenseDetail extends Omit<ExpenseRow, "tickets" | "pagos"> {
   page_no: number | null;
   tickets: LinkedTicket[];
   payments: LinkedPayment[];
+  actas: { acta_id: number; numero: number | null; fecha: string; id: number; tipo: ActaItemKind; texto: string; importe: number | null }[];
 }
 
 /** A debit of the consortium's bank statement linked to an expense line (proof of payment). */
@@ -179,7 +205,7 @@ export interface Article extends ArticleIndex {
   pages: { id: number; document_id: number; page_no: number }[];
 }
 export interface SearchHit {
-  entity_type: "page" | "article" | "expense" | "ticket" | "acta_item";
+  entity_type: "page" | "article" | "expense" | "ticket" | "acta";
   entity_id: number;
   page_id: number | null;
   title: string;
@@ -199,4 +225,45 @@ export interface PageInfo {
   document_pages: number;
   prev_id: number | null;
   next_id: number | null;
+}
+
+export type ActaItemKind = "decision" | "tarea" | "tema";
+export interface ActaSummary {
+  id: number;
+  numero: number | null;
+  fecha: string;
+  tipo: "comision" | "asamblea" | "otro";
+  resumen: string;
+  verified: number;
+  items: { id: number; tipo: ActaItemKind; texto: string; importe: number | null }[];
+}
+export interface ActaDetail extends Omit<ActaSummary, "items"> {
+  asistentes: string[];
+  pages: { id: number; document_id: number; page_no: number }[];
+  items: {
+    id: number;
+    orden: number;
+    tipo: ActaItemKind;
+    texto: string;
+    importe: number | null;
+    period_id: string | null;
+    gastos: { id: number; period_id: string; rubro: string; concepto: string; detalle: string | null; importe: number }[];
+    observaciones: { id: string; titulo: string; estado: ObservationState }[];
+  }[];
+}
+
+export type CommentEntity = "general" | "expense" | "ticket" | "article" | "acta" | "observation";
+export interface Comment {
+  id: number;
+  entity_type: CommentEntity;
+  entity_id: number | string | null;
+  body: string;
+  created_at: string; // UTC, "YYYY-MM-DD HH:MM:SS"
+  status: "visible" | "hidden";
+  author: string;
+  mine: boolean;
+  reports?: number; // admins only
+  moderated?: number;
+  label?: string | null; // recent feed: what it is about
+  history?: { action: "hide" | "restore"; moderator: number; at: string }[];
 }

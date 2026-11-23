@@ -280,4 +280,4 @@ Rules:
 2. How many months and pages exist now (backfill size)?
 3. Does the administrator send born-digital PDFs or only scans? (Born-digital makes extraction much more accurate.)
 4. Should each neighbour see "your unit's share" (needs each UF's coefficient from the reglamento)?
-5. Who will moderate comments, and who holds the admin role?
+5. ~~Who will moderate comments?~~ **Decided (2026-11-23):** moderators of the comisión, each with their own admin link (`make admin-link`); 3 reports from distinct devices auto-hide a comment until a moderator acts. Acta photos are published as photographed; transcriptions name people by role only.

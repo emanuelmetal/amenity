@@ -104,6 +104,8 @@ def _clean(text: str) -> str:
 def extract_document(m: DocumentManifest) -> BaseModel | None:
     stale = doc_dir(m) / "extract.json"
     stale.unlink(missing_ok=True)  # a failed extraction must never leave an old result to be published
+    if m.kind == "acta":
+        return None  # one transcription for the whole book (actas.py), nothing per photo
     manual = MANUAL_DIR / f"{m.work_dir_name}.json"
     pages = [(p.page_no, raw_text(m, p.page_no)) for p in m.pages if not p.restricted]
     result: BaseModel | None
@@ -123,7 +125,7 @@ def extract_document(m: DocumentManifest) -> BaseModel | None:
 
         result = receipts.build(m)
     else:
-        return None  # actas: Phase 3
+        return None
     out: Path = doc_dir(m) / "extract.json"
     out.write_text(result.model_dump_json(indent=2))
     return result

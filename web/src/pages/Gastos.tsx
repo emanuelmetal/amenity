@@ -2,6 +2,7 @@ import { keepPreviousData, useQuery } from "@tanstack/react-query";
 import { ArrowDown, ArrowUp, ChevronLeft, ChevronRight, Landmark, Paperclip } from "lucide-react";
 import { useEffect, useState } from "react";
 import { Link, useSearchParams } from "react-router";
+import { Comments } from "../components/Comments";
 import { PageViewer } from "../components/PageViewer";
 import { kindLabel, linkStatus } from "../components/ReceiptDetail";
 import { Button, Card, Empty, ErrorBox, Input, Loading, MultiSelect, PageHeader, SidePanel, StatusTag } from "../components/ui";
@@ -129,6 +130,21 @@ export function ExpensePanel({ id, onClose }: { id: number | null; onClose: () =
               </ul>
             </div>
           )}
+          {e.actas.length > 0 && (
+            <div>
+              <h3 className="mb-2 text-sm font-semibold text-gray-900">En las actas</h3>
+              <ul className="divide-y divide-gray-200 text-sm">
+                {e.actas.map((a) => (
+                  <li key={a.id} className="py-2">
+                    <Link className="font-medium text-gray-900 hover:text-primary" to={`/actas/${a.acta_id}`}>
+                      {a.numero ? `Acta ${a.numero}` : "Acta"} · {formatDate(a.fecha)}
+                    </Link>
+                    <span className="block text-xs">{a.texto}{a.importe != null ? ` · ${formatMoney(a.importe)}` : ""}</span>
+                  </li>
+                ))}
+              </ul>
+            </div>
+          )}
           <div>
             <h3 className="mb-2 text-sm font-semibold text-gray-900">Página de la liquidación</h3>
             {e.page_id && e.document_id && e.page_no ? (
@@ -137,6 +153,7 @@ export function ExpensePanel({ id, onClose }: { id: number | null; onClose: () =
               <p className="text-sm text-gray-400">Sin página asociada.</p>
             )}
           </div>
+          <Comments entityType="expense" entityId={e.id} />
         </div>
       )}
     </SidePanel>

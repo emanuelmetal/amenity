@@ -65,7 +65,8 @@ backup:
 
 # d1 export refuses databases with virtual tables unless they are left out; search_fts is rebuilt from these.
 BACKUP_TABLES := documents pages periods expense_lines tickets ticket_items expense_ticket_links tags \
-                 entity_tags reglamento_articles actas acta_items access_codes comments observations
+                 entity_tags reglamento_articles actas acta_items acta_expense_links access_codes comments \
+                 comment_reports comment_moderation observations
 
 test: test-py test-web
 test-py:

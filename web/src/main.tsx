@@ -4,9 +4,11 @@ import { createRoot } from "react-dom/client";
 import { createBrowserRouter, RouterProvider } from "react-router";
 import { AppShell } from "./components/AppShell";
 import { Empty } from "./components/ui";
+import Actas from "./pages/Actas";
 import Analisis from "./pages/Analisis";
 import Buscar from "./pages/Buscar";
 import Comprobantes from "./pages/Comprobantes";
+import Comentarios from "./pages/Comentarios";
 import ComoFunciona from "./pages/ComoFunciona";
 import Gastos from "./pages/Gastos";
 import Inicio from "./pages/Inicio";
@@ -30,6 +32,9 @@ const router = createBrowserRouter([
       { path: "/observaciones", element: <Observaciones /> },
       { path: "/reglamento", element: <Reglamento /> },
       { path: "/reglamento/:id", element: <Reglamento /> },
+      { path: "/actas", element: <Actas /> },
+      { path: "/actas/:id", element: <Actas /> },
+      { path: "/comentarios", element: <Comentarios /> },
       { path: "/buscar", element: <Buscar /> },
       { path: "/paginas/:id", element: <Pagina /> },
       { path: "/como-funciona", element: <ComoFunciona /> },

@@ -3,7 +3,7 @@ import { FileCheck2, FileWarning, Landmark, Receipt, Wallet } from "lucide-react
 import { Link } from "react-router";
 import { IncomeVsSpendChart, SpendByRubroChart, TopVendors } from "../components/charts";
 import { buttonClass, Card, ErrorBox, KpiTile, Loading, PageHeader } from "../components/ui";
-import { api, type MonthlyStat, type RubroStat, type VendorStat } from "../lib/api";
+import { api, type ActaSummary, type MonthlyStat, type RubroStat, type VendorStat } from "../lib/api";
 import { formatDate, formatMoneyRound, formatPeriod } from "../lib/format";
 
 function Delta({ current, previous }: { current: number; previous?: number }) {
@@ -22,6 +22,10 @@ export default function Inicio() {
   const monthly = useQuery({ queryKey: ["stats", "monthly"], queryFn: () => api<MonthlyStat[]>("/stats/monthly") });
   const rubros = useQuery({ queryKey: ["stats", "rubros"], queryFn: () => api<RubroStat[]>("/stats/rubros") });
   const vendors = useQuery({ queryKey: ["stats", "proveedores"], queryFn: () => api<VendorStat[]>("/stats/proveedores") });
+  const actas = useQuery({ queryKey: ["actas"], queryFn: () => api<ActaSummary[]>("/actas") });
+  const decisions = (actas.data ?? [])
+    .flatMap((a) => a.items.filter((i) => i.tipo === "decision").map((i) => ({ ...i, acta: a })))
+    .slice(0, 5);
 
   if (monthly.isLoading) return <Loading />;
   if (monthly.error) return <ErrorBox error={monthly.error} />;
@@ -99,6 +103,22 @@ export default function Inicio() {
           )}
         </Card>
       </div>
+      {decisions.length > 0 && (
+        <Card title="Últimas decisiones de la comisión" actions={<Link className={buttonClass()} to="/actas">Ver actas</Link>}>
+          <ul className="divide-y divide-gray-100">
+            {decisions.map((d) => (
+              <li key={d.id} className="py-2 first:pt-0 last:pb-0">
+                <Link to={`/actas/${d.acta.id}`} className="block hover:text-primary">
+                  <span className="block text-sm text-gray-900">{d.texto}</span>
+                  <span className="block text-xs text-gray-500">
+                    {d.acta.numero ? `Acta ${d.acta.numero}` : "Acta"} · {formatDate(d.acta.fecha)}
+                  </span>
+                </Link>
+              </li>
+            ))}
+          </ul>
+        </Card>
+      )}
       <p className="text-xs text-gray-400">
         Los datos marcados como “Sin verificar” fueron extraídos automáticamente y todavía no los revisó la comisión.
       </p>

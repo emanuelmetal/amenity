@@ -68,3 +68,23 @@ def ticket_ids(sha16: str, tickets: list) -> list[int]:
         out.append(stable_id("ticket", *key, seen[key]))
         seen[key] += 1
     return out
+
+
+def article_ids(sha16: str, articles: list) -> list[int]:
+    """Reglamento articles (comments point at them): document + article number + occurrence."""
+    seen: Counter[str] = Counter()
+    out: list[int] = []
+    for a in articles:
+        out.append(stable_id("article", sha16, a.numero, seen[a.numero]))
+        seen[a.numero] += 1
+    return out
+
+
+def acta_id(acta) -> int:
+    """By the acta's number in the book (or its date when it has none)."""
+    return stable_id("acta", acta.key)
+
+
+def acta_item_ids(acta) -> list[int]:
+    """Position within the acta: rewording an item keeps its id."""
+    return [stable_id("acta_item", acta.key, i) for i in range(len(acta.items))]

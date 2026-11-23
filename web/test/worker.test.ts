@@ -392,3 +392,185 @@ describe("toFtsQuery", () => {
   });
 
 });
+
+describe("actas", () => {
+  beforeEach(() => {
+    raw.exec(`
+      INSERT INTO documents (id, kind, title, r2_key_pdf, sha256, pages) VALUES
+        (5, 'acta', 'Libro de actas, folio 265', 'docs/a1.pdf', 'ha1', 1),
+        (6, 'acta', 'Libro de actas, folio 266', 'docs/a2.pdf', 'ha2', 1),
+        (7, 'acta', 'Libro de actas (foto sin transcribir)', 'docs/a3.pdf', 'ha3', 1);
+      INSERT INTO pages (id, document_id, page_no, r2_key_img, text, restricted) VALUES
+        (50001, 5, 1, 'img/a1.webp', 'folio 265', 0), (60001, 6, 1, 'img/a2.webp', 'folio 266', 0),
+        (70001, 7, 1, 'img/a3.webp', '', 1);
+      INSERT INTO actas (id, numero, fecha, tipo, resumen, asistentes_json, page_ids_json, verified)
+        VALUES (900, 101, '2025-11-27', 'comision', 'Apertura de sobres', '["4 integrantes de la comisión"]', '[60001, 70001, 50001]', 0);
+      INSERT INTO acta_items (id, acta_id, orden, tipo, texto, importe, observation_ids_json)
+        VALUES (901, 900, 1, 'decision', 'Pintar el palier', 1000, '["2026-10-01"]'), (902, 900, 2, 'tarea', 'Pedir presupuesto', NULL, '[]');
+      INSERT INTO acta_expense_links VALUES (901, 1);
+      INSERT INTO observations (id, period_id, tipo, titulo, detalle, estado, fecha) VALUES
+        ('2026-10-01', '2026-10', 'otro', 'Obs', 'd', 'abierta', '2026-11-21');
+    `);
+  });
+
+  it("lists actas with items and shows the detail with folios in reading order, restricted ones dropped", async () => {
+    const cookie = await login();
+    const list = await (await call("/api/actas", { cookie })).json();
+    expect(list[0].items.map((i: any) => i.id)).toEqual([901, 902]);
+    const a = await (await call("/api/actas/900", { cookie })).json();
+    expect(a.pages.map((p: any) => p.id)).toEqual([60001, 50001]);
+    expect(a.asistentes).toEqual(["4 integrantes de la comisión"]);
+    expect(a.items[0].gastos.map((g: any) => g.id)).toEqual([1]);
+    expect(a.items[0].observaciones.map((o: any) => o.id)).toEqual(["2026-10-01"]);
+    expect(a).not.toHaveProperty("page_ids_json");
+    const e = await (await call("/api/expenses/1", { cookie })).json();
+    expect(e.actas.map((x: any) => x.id)).toEqual([901]);
+    expect((await call("/api/actas/1", { cookie })).status).toBe(404);
+  });
+});
+
+describe("comments", () => {
+  const json = (body: unknown, extra: Record<string, string> = {}) => ({
+    method: "POST",
+    body: JSON.stringify(body),
+    headers: { "Content-Type": "application/json", Origin: BASE, ...extra },
+  });
+  const post = (cookie: string, path: string, body: unknown, extra?: Record<string, string>) =>
+    call(path, { ...json(body, extra), cookie });
+
+  it("posts anonymously and never exposes the author's key or access code", async () => {
+    const a = await login();
+    const res = await post(a, "/api/comments", { entity_type: "expense", entity_id: 1, body: "  ¿Por qué tanto?  " });
+    expect(res.status).toBe(201);
+    const created = await res.json();
+    expect(created).toMatchObject({ body: "¿Por qué tanto?", author: "Vecino/a anónimo/a", mine: true });
+    const stored = raw.prepare("SELECT author_key, access_code_id FROM comments").get() as any;
+    expect(stored.access_code_id).toBe(1);
+    expect(stored.author_key).toMatch(/^[0-9a-f]{64}$/);
+    const b = await login();
+    for (const path of ["/api/comments?entity_type=expense&entity_id=1", "/api/comments/recent"]) {
+      const text = await (await call(path, { cookie: b })).text();
+      expect(text).not.toContain(stored.author_key);
+      expect(text).not.toContain("access_code");
+      expect(JSON.parse(text)[0]).toMatchObject({ mine: false, author: "Vecino/a anónimo/a" });
+    }
+    expect((await (await call("/api/comments/recent", { cookie: a })).json())[0]).toMatchObject({
+      mine: true,
+      label: "Pintura palier · 2026-10",
+    });
+  });
+
+  it("refuses writes from other origins or without JSON", async () => {
+    const a = await login();
+    const body = { entity_type: "general", body: "hola" };
+    expect((await post(a, "/api/comments", body, { Origin: "https://evil.example" })).status).toBe(403);
+    expect((await call("/api/comments", { method: "POST", body: JSON.stringify(body), cookie: a, headers: { "Content-Type": "application/json" } })).status).toBe(403);
+    expect((await post(a, "/api/comments", body, { "Content-Type": "text/plain" })).status).toBe(415);
+    expect(raw.prepare("SELECT count(*) AS n FROM comments").get()).toEqual({ n: 0 });
+    // and nothing without a session at all
+    expect((await call("/api/comments", json(body))).status).toBe(401);
+  });
+
+  it("validates the target and the body", async () => {
+    const a = await login();
+    const bad = async (b: unknown) => (await post(a, "/api/comments", b)).status;
+    expect(await bad({ entity_type: "pages", entity_id: 10, body: "x" })).toBe(400);
+    expect(await bad({ entity_type: "expense", entity_id: 12345, body: "x" })).toBe(404);
+    expect(await bad({ entity_type: "expense", entity_id: "1 OR 1=1", body: "x" })).toBe(400);
+    expect(await bad({ entity_type: "general", entity_id: 3, body: "x" })).toBe(400);
+    expect(await bad({ entity_type: "general", body: "   " })).toBe(400);
+    expect(await bad({ entity_type: "general", body: "x".repeat(2001) })).toBe(400);
+    expect(await bad({ entity_type: "general", body: "mi CUIL es 20-12345678-3" })).toBe(400);
+    expect(await bad({ entity_type: "general", body: "x".repeat(2000) })).toBe(201);
+    expect(await bad({ entity_type: "article", entity_id: "2", body: "ok" })).toBe(201);
+  });
+
+  it("limits each device to 10 comments a day", async () => {
+    const a = await login();
+    for (let i = 0; i < 10; i++) expect((await post(a, "/api/comments", { entity_type: "general", body: `c${i}` })).status).toBe(201);
+    expect((await post(a, "/api/comments", { entity_type: "general", body: "otro" })).status).toBe(429);
+    const b = await login(); // another device is not affected
+    expect((await post(b, "/api/comments", { entity_type: "general", body: "otro" })).status).toBe(201);
+  });
+
+  it("lets authors delete only their own comments", async () => {
+    const a = await login();
+    const b = await login();
+    const { id } = await (await post(a, "/api/comments", { entity_type: "general", body: "mío" })).json();
+    expect((await call(`/api/comments/${id}`, { method: "DELETE", cookie: b, headers: { Origin: BASE } })).status).toBe(404);
+    expect((await call(`/api/comments/${id}`, { method: "DELETE", cookie: a })).status).toBe(403); // no Origin
+    expect((await call(`/api/comments/${id}`, { method: "DELETE", cookie: a, headers: { Origin: BASE } })).status).toBe(200);
+    expect(await (await call("/api/comments?entity_type=general", { cookie: a })).json()).toEqual([]);
+  });
+
+  it("hides after 3 reports from distinct devices; two moderators restore and hide, logged", async () => {
+    const author = await login();
+    const { id } = await (await post(author, "/api/comments", { entity_type: "general", body: "insulto" })).json();
+    const list = async (cookie: string) => (await (await call("/api/comments?entity_type=general", { cookie })).json()) as any[];
+    await post(author, `/api/comments/${id}/report`, {}); // self-report: ignored
+    const r1 = await login();
+    await post(r1, `/api/comments/${id}/report`, {});
+    await post(r1, `/api/comments/${id}/report`, {}); // same device twice: one report
+    const r2 = await login();
+    await post(r2, `/api/comments/${id}/report`, {});
+    expect(await list(r2)).toHaveLength(1);
+    const r3 = await login();
+    await post(r3, `/api/comments/${id}/report`, {});
+    expect(await list(r3)).toEqual([]); // hidden for neighbours
+
+    // neighbours cannot moderate
+    expect((await post(r3, `/api/comments/${id}/moderate`, { action: "restore" })).status).toBe(403);
+    expect((await call("/api/moderation", { cookie: r3 })).status).toBe(403);
+
+    raw.prepare("INSERT INTO access_codes (id, code_hash, kind) VALUES (3, ?, 'admin')").run(await sha256Hex("C".repeat(43)));
+    const modA = await login(ADMIN_TOKEN);
+    const modB = await login("C".repeat(43));
+    const seen = await list(modA);
+    expect(seen[0]).toMatchObject({ status: "hidden", reports: 3 });
+    expect(JSON.stringify(seen)).not.toContain("author_key");
+    expect((await post(modA, `/api/comments/${id}/moderate`, { action: "restore" })).status).toBe(200);
+    expect(await list(r3)).toHaveLength(1);
+    const r4 = await login(); // after a moderator's decision, reports no longer auto-hide
+    await post(r4, `/api/comments/${id}/report`, {});
+    expect(await list(r3)).toHaveLength(1);
+    expect((await post(modB, `/api/comments/${id}/moderate`, { action: "hide" })).status).toBe(200);
+    expect(await list(r3)).toEqual([]);
+    const queue = await (await call("/api/moderation", { cookie: modB })).json();
+    expect(queue[0].history.map((h: any) => [h.action, h.moderator])).toEqual([["restore", 2], ["hide", 3]]);
+    expect(JSON.stringify(queue)).not.toContain("access_code_id");
+    expect((await post(modA, `/api/comments/${id}/moderate`, { action: "delete" })).status).toBe(400);
+  });
+});
+
+describe("comments: review fixes", () => {
+  const post = (cookie: string, path: string, body: unknown) =>
+    call(path, { method: "POST", body: JSON.stringify(body), cookie, headers: { "Content-Type": "application/json", Origin: BASE } });
+
+  it("rejects inherited entity names and non-object bodies with 400", async () => {
+    const a = await login();
+    expect((await post(a, "/api/comments", { entity_type: "constructor", body: "x" })).status).toBe(400);
+    expect((await post(a, "/api/comments", null)).status).toBe(400);
+    expect((await call("/api/comments?entity_type=toString", { cookie: a })).status).toBe(400);
+  });
+
+  it("counts reports and the daily limit per access code on unit links", async () => {
+    const UNIT = "D".repeat(43);
+    raw.prepare("INSERT INTO access_codes (id, code_hash, kind, unit_label) VALUES (9, ?, 'unit', 'UF1')").run(await sha256Hex(UNIT));
+    const author = await login();
+    const { id } = await (await post(author, "/api/comments", { entity_type: "general", body: "hola" })).json();
+    for (let i = 0; i < 3; i++) await post(await login(UNIT), `/api/comments/${id}/report`, {});
+    expect(raw.prepare("SELECT reports, status FROM comments WHERE id = ?").get(id)).toEqual({ reports: 1, status: "visible" });
+    for (let i = 0; i < 10; i++) expect((await post(await login(UNIT), "/api/comments", { entity_type: "general", body: `u${i}` })).status).toBe(201);
+    expect((await post(await login(UNIT), "/api/comments", { entity_type: "general", body: "más" })).status).toBe(429);
+  });
+
+  it("drops comments on unpublished items from the feed and deleted ones from moderation", async () => {
+    const a = await login();
+    const { id } = await (await post(a, "/api/comments", { entity_type: "expense", entity_id: 2, body: "sobre el taxi" })).json();
+    raw.exec("DELETE FROM expense_lines WHERE id = 2");
+    expect(await (await call("/api/comments/recent", { cookie: a })).json()).toEqual([]);
+    raw.prepare("UPDATE comments SET reports = 1 WHERE id = ?").run(id);
+    await call(`/api/comments/${id}`, { method: "DELETE", cookie: a, headers: { Origin: BASE } });
+    expect(await (await call("/api/moderation", { cookie: await login(ADMIN_TOKEN) })).json()).toEqual([]);
+  });
+});

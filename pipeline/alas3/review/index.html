@@ -133,7 +133,7 @@ let data = null;
 let tab = "pending"; // from the URL hash once TABS is known (a reload keeps the tab)
 const TABS = [
   ["pending", "Para revisar"], ["unmatched", "Por mes"], ["receipts", "Comprobantes"],
-  ["movements", "Movimientos"], ["auto", "Vinculados"], ["rejected", "Rechazados"],
+  ["movements", "Movimientos"], ["auto", "Vinculados"], ["rejected", "Rechazados"], ["actas", "Actas"],
 ];
 // "Comprobantes" / "Movimientos" filter: all | unlinked | unverified (receipts only).
 let receiptFilter = "all";
@@ -887,6 +887,29 @@ function rejectionCard(r) {
       el("button", { class: "act", onclick: () => act(linkBody(t, r.line.id, null)) }, "Deshacer rechazo")));
 }
 
+// Actas (actas.py): the transcription next to the folio photos; the owner checks it and the
+// gastos each item links to, then marks the acta verified (review.json actas_verified).
+const ACTA_ITEM = { decision: "Decisión", tarea: "Tarea", tema: "Tema" };
+function actaCard(a) {
+  const title = `${a.numero ? `Acta ${a.numero}` : "Acta"} · ${a.fecha} · ${a.tipo}`;
+  const items = a.items.map((it) => el("li", {},
+    el("strong", {}, ACTA_ITEM[it.tipo] + ": "), it.texto, it.importe != null ? ` (${fmt(it.importe)})` : "",
+    it.gastos.length ? el("ul", {}, ...it.gastos.map((g) => el("li", { class: g.missing ? "" : "muted" },
+      g.missing ? `⚠ gasto ${g.id} no existe (se descarta al publicar)` : `${monthLabel(g.period)} · ${g.concepto}${g.detalle ? " – " + g.detalle : ""} · ${fmt(g.importe)}`))) : null,
+    it.observaciones.length ? el("div", { class: "muted" }, "Observaciones: " + it.observaciones.join(", ")) : null));
+  const folios = a.folios.map((f) => el("div", { class: "row", style: "align-items:flex-start; gap:12px" },
+    el("a", { href: `/img/${f.doc}/${f.page}.webp`, target: "_blank" }, el("img", { src: `/img/${f.doc}/${f.page}.webp`, alt: `Página ${f.page}`, style: "width:280px; border:1px solid #ddd" })),
+    el("div", { style: "white-space:pre-line; max-width:60ch; font-size:13px" }, el("strong", {}, f.folio ? `Folio ${f.folio}\n` : `Página ${f.page}\n`), f.texto)));
+  return el("div", { class: "card" },
+    el("div", { class: "row", style: "justify-content:space-between" }, el("strong", {}, title),
+      el("button", { class: "act", "aria-pressed": a.verified, onclick: () => act({ type: "acta", key: a.key, verified: !a.verified }) },
+        a.verified ? "✓ Verificada (deshacer)" : "Marcar verificada")),
+    el("p", {}, a.resumen),
+    a.asistentes.length ? el("div", { class: "muted" }, "Presentes: " + a.asistentes.join(", ")) : null,
+    el("ul", {}, ...items),
+    el("details", {}, el("summary", {}, `Fotos y transcripción (${a.folios.length})`), ...folios));
+}
+
 function render() {
   const openReceipts = data.receipts.filter(evidOpen);
   const openMovements = (data.all_movements || []).filter(evidOpen);
@@ -898,6 +921,7 @@ function render() {
     movements: openMovements.filter((m) => !m.linked).length,
     rejected: (data.rejections || []).length,
     auto: byLine(data.groups).filter((gs) => gs.every((g) => g.status !== "pending")).length,
+    actas: (data.actas || []).filter((a) => !a.verified).length,
   };
   const nav = document.getElementById("tabs");
   nav.replaceChildren(...TABS.map(([k, label]) => el("button", { "aria-pressed": tab === k, onclick: () => { tab = k; history.replaceState(null, "", `#${k}`); render(); } }, `${label} (${counts[k]})`)));
@@ -923,6 +947,7 @@ function render() {
       ...monthGroups(rows, (t) => receiptCard(t, { linkable: true }))];
   }
   if (tab === "rejected") items = (data.rejections || []).map(rejectionCard);
+  if (tab === "actas") items = (data.actas || []).map(actaCard);
   if (tab === "movements") {
     const rows = openMovements.filter((m) => movementFilter === "all" || !m.linked);
     items = [monthsBar(),

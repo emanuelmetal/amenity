@@ -3,6 +3,7 @@ import { useState } from "react";
 import { Link } from "react-router";
 import { api, type TicketDetail } from "../lib/api";
 import { formatDate, formatMoney, formatPeriod, TICKET_KIND_LABEL } from "../lib/format";
+import { Comments } from "./Comments";
 import { PageViewer } from "./PageViewer";
 import { ErrorBox, Loading, StatusTag } from "./ui";
 
@@ -126,6 +127,7 @@ export function ReceiptDetail({ id }: { id: number }) {
           <p className="text-sm text-gray-400">La imagen no se publica por privacidad.</p>
         )}
       </div>
+      <Comments entityType="ticket" entityId={t.id} />
     </div>
   );
 }
