@@ -16,7 +16,10 @@ Output per document in data/work/docs/<sha16>/:
 Manual overrides (human review): data/work/restrict.json
   {"<sha16>": {"restrict": [3, 4], "allow": [7]}}
 `restrict` forces pages private; `allow` publishes a page the automatic policy
-restricted (e.g. a scanned page with no OCR text, after looking at it).
+restricted (e.g. a scanned page with no OCR text, after looking at it); `full` publishes
+a page exactly as the administrator sent it: no blackout and no masking at all (names,
+CUIL, addresses stay visible and searchable). Only on the owner's explicit decision, page
+by page (e.g. an insurance policy the consortium pays for); `restrict` still wins.
 """
 
 from __future__ import annotations
@@ -145,6 +148,7 @@ class _Override(BaseModel):
     model_config = ConfigDict(extra="forbid")
     restrict: list[int] = []
     allow: list[int] = []
+    full: list[int] = []  # published unredacted: the owner's explicit decision, page by page
 
 
 def load_overrides(known_sha16: set[str] | None = None) -> dict[str, _Override]:
@@ -355,14 +359,19 @@ def ingest_file(path: Path, kind: str, force: bool = False) -> DocumentManifest:
                     # to black out (the QR or number included).
                     reason = None
 
+            unredacted = page_no in ov.full and page_no not in ov.restrict
             if page_no in ov.restrict:
                 reason = "manual"
-            elif page_no in ov.allow:
+            elif page_no in ov.allow or unredacted:
                 reason = None
+            if unredacted:
+                rects, hidden, strings = [], set(), []
+                visible = list(row_texts)
+                (out / "raw" / f"p{page_no:03d}.txt").write_text("\n".join(visible))
 
             rec = PageRecord(
                 page_no=page_no,
-                text="" if reason else (redact.redact_text("\n".join(visible)) or ""),
+                text="" if reason else ("\n".join(visible) if unredacted else (redact.redact_text("\n".join(visible)) or "")),
                 ocr_engine="none"
                 if not any(row_texts)
                 else ("tesseract" if i in scanned or mixed else "pdf-text"),

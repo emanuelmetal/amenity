@@ -22,9 +22,12 @@ from .classify import classify_text
 from .config import WORK
 from .ingest import doc_dir
 from .qr import TIPO_CMP, parse_arca
-from .schemas import Comprobantes, DocumentManifest, Ticket, TicketTranscription
+from .schemas import PRIVATE_CONCEPTS, Comprobantes, DocumentManifest, Ticket, TicketTranscription
 
 TRANSCRIPTIONS = WORK / "extract"
+# Restriction reasons a checked transcription lifts (ingest: `checked` map); the rest
+# (payroll, personal, manual, debtors) stay private and are never "to transcribe".
+CHECKABLE_REASONS = ("no_text", "qr_not_located", "unlocated_identifier", "unchecked_scan")
 _EXACT = ("fecha", "cuit", "tipo_cmp", "pto_vta", "nro_cmp", "total", "cae")
 
 
@@ -74,6 +77,11 @@ def build(m: DocumentManifest) -> Comprobantes:
     return build_with_origin(m)[0]
 
 
+def _next(period: str) -> str:
+    y, mth = map(int, period.split("-"))
+    return f"{y + 1}-01" if mth == 12 else f"{y}-{mth + 1:02d}"
+
+
 def build_with_origin(m: DocumentManifest) -> tuple[Comprobantes, list[int | None]]:
     """Also returns, per ticket, the index of its transcription entry (None: QR only)."""
     tr = load_transcription(m)
@@ -97,7 +105,11 @@ def build_with_origin(m: DocumentManifest) -> tuple[Comprobantes, list[int | Non
 
     restricted = {p.page_no for p in m.pages if p.restricted}
     for t in tickets:
-        t.period = t.period or m.period
+        # A receipt belongs to the month of its own date, not to the bundle that brought it
+        # (an old invoice billed in a later liquidación). A date after the bundle's next month
+        # is a misread: the bundle's month then.
+        dated = t.fecha[:7] if t.fecha else None
+        t.period = t.period or (dated if dated and m.period and dated <= _next(m.period) else m.period)
         if t.tipo_cmp in TIPO_CMP and (t.kind == "otro" or t.letra is None):
             kind, letra = TIPO_CMP[t.tipo_cmp]
             t.kind = kind if t.kind == "otro" else t.kind
@@ -115,13 +127,38 @@ def build_with_origin(m: DocumentManifest) -> tuple[Comprobantes, list[int | Non
     tickets = [tickets[i] for i in keep]
     origin = [origin[i] for i in keep]
 
+    # Totals read from payroll pages: receipts that only say what they are and how much.
+    for pr in tr.private_receipts:
+        if pr.page not in restricted:
+            raise ValueError(f"{m.source_name} p.{pr.page}: private_receipts only for restricted pages")
+        doc = PRIVATE_CONCEPTS[pr.concepto]
+        keywords = ["sueldo encargado"] if doc == "Recibo de sueldo" else ["cargas sociales"]
+        sub, tags = classify_text(" ".join(keywords))
+        tickets.append(Ticket(
+            page_nos=[pr.page], kind="recibo", proveedor=f"{doc} (documento privado)", descripcion=pr.concepto,
+            total=pr.total, keywords=keywords, source="manual", confidence=1.0, privado=True,
+            period=pr.periodo or m.period, subcategoria=sub, tags=tags,
+        ))  # fmt: skip
+        origin.append(None)
+
     # Bank statements are parsed, not transcribed; one that fails its balance check is
     # left for a human (its pages stay "to transcribe") and nothing of it is used.
-    statements, failed = bank.statements(m)
-    covered = {n for t in tickets for n in t.page_nos} | set(tr.other_pages)
+    statements, failed = bank.statements(m, {f.page: f.saldo_final for f in tr.bank_closing})
+    # A cheque on a private page is never used (as with receipts), nor one whose page nobody
+    # checked: its account data and signature must be blacked out (`checked`) before it is shown.
+    cheques = [c for c in tr.cheques if c.page not in restricted and c.page in tr.checked]
+    covered = {n for t in tickets for n in t.page_nos} | set(tr.other_pages) | {c.page for c in cheques}
     covered |= {n for s in statements for n in s.page_nos}
     covered -= set(failed)
-    todo = [p.page_no for p in m.pages if p.page_no not in covered and not p.restricted]
+    # A scan that is restricted only until someone checks it (unreadable, QR or identifier not
+    # located) still has to be transcribed: skipping it would hide its receipts for good. A
+    # checked page is not "done" either: it needs its receipts, or an `other_pages` entry.
+    todo = [
+        p.page_no
+        for p in m.pages
+        if p.page_no not in covered
+        and (not p.restricted or p.restricted_reason in CHECKABLE_REASONS)
+    ]
     return Comprobantes(
-        tickets=tickets, other_pages=tr.other_pages, untranscribed=todo, bank=statements
+        tickets=tickets, other_pages=tr.other_pages, untranscribed=todo, bank=statements, cheques=cheques
     ), origin

@@ -5,7 +5,7 @@ import { Link, useSearchParams } from "react-router";
 import { PageViewer } from "../components/PageViewer";
 import { kindLabel, linkStatus } from "../components/ReceiptDetail";
 import { Button, Card, Empty, ErrorBox, Input, Loading, MultiSelect, PageHeader, SidePanel, StatusTag } from "../components/ui";
-import { api, type ExpenseDetail, type ExpensePage, type Period, type Rubro } from "../lib/api";
+import { api, type ExpenseDetail, type ExpensePage, type ExpenseRow, type Period, type Rubro } from "../lib/api";
 import { formatDate, formatMoney, formatPeriod } from "../lib/format";
 
 const COLUMNS: { key: string; label: string; right?: boolean }[] = [
@@ -25,7 +25,7 @@ function useDebounced<T>(value: T, ms = 300): T {
   return v;
 }
 
-function ExpensePanel({ id, onClose }: { id: number | null; onClose: () => void }) {
+export function ExpensePanel({ id, onClose }: { id: number | null; onClose: () => void }) {
   const q = useQuery({ queryKey: ["expense", id], enabled: id !== null, queryFn: () => api<ExpenseDetail>(`/expenses/${id}`) });
   const e = q.data;
   return (
@@ -39,6 +39,9 @@ function ExpensePanel({ id, onClose }: { id: number | null; onClose: () => void 
             <div className="text-lg font-semibold text-gray-900">{e.concepto}</div>
             {e.detalle && <div className="text-sm">{e.detalle}</div>}
             <div className="tabular text-xl font-semibold text-gray-900">{formatMoney(e.importe)}</div>
+            {e.fondo ? (
+              <p className="mt-1 text-xs">Pagado del fondo de obra: no forma parte del total de gastos del mes.</p>
+            ) : null}
           </div>
           <dl className="grid grid-cols-2 gap-2 text-sm">
             <dt>Proveedor</dt>
@@ -84,16 +87,24 @@ function ExpensePanel({ id, onClose }: { id: number | null; onClose: () => void 
                     <div className="flex items-start justify-between gap-3">
                       <span>
                         <span className="block font-medium text-gray-900">
-                          {p.kind === "gastos" ? "Comisiones e impuestos del banco" : "Pago desde la cuenta del consorcio"}
+                          {p.kind === "gastos" ? "Comisiones e impuestos del banco"
+                            : p.kind === "cheque" ? "Cheque del consorcio, todavía sin debitar"
+                            : p.cheque_numero ? "Cheque del consorcio, debitado de la cuenta" : "Pago desde la cuenta del consorcio"}
                         </span>
                         <span className="block text-xs">
                           {formatDate(p.fecha)}{p.banco ? ` · ${p.banco}` : ""} · {p.descripcion}
                         </span>
+                        {p.cheque_numero && (
+                          <span className="block text-xs">
+                            Cheque N° {p.cheque_numero}{p.cheque_fecha_pago ? `, pagadero el ${formatDate(p.cheque_fecha_pago)}` : ""}
+                          </span>
+                        )}
                         <span className="mt-1 flex flex-wrap items-center gap-2">
                           <StatusTag status={linkStatus(p.status, p.score)} />
-                          {p.pages.map((pg) => (
+                          {p.pages.map((pg, i) => (
                             <Link key={pg.id} className="text-xs text-primary hover:underline" to={`/paginas/${pg.id}`}>
-                              Resumen bancario, pág. {pg.page_no}
+                              {/* A cleared cheque: the statement page, then the cheque's photo. */}
+                              {p.kind === "cheque" || (p.cheque_numero && i === p.pages.length - 1 && p.pages.length > 1) ? "Foto del cheque" : "Resumen bancario"}, pág. {pg.page_no}
                             </Link>
                           ))}
                         </span>
@@ -129,6 +140,16 @@ function ExpensePanel({ id, onClose }: { id: number | null; onClose: () => void 
         </div>
       )}
     </SidePanel>
+  );
+}
+
+/** A line needs a receipt and a bank payment (each only when that evidence exists for its month). */
+function Missing({ row }: { row: ExpenseRow }) {
+  return (
+    <>
+      {row.falta_comprobante ? <StatusTag status="sin-comprobante" label="Falta comprobante" /> : null}
+      {row.falta_pago ? <StatusTag status="sin-comprobante" label="Falta pago bancario" /> : null}
+    </>
   );
 }
 
@@ -186,7 +207,7 @@ export default function Gastos() {
             <Input value={text} onChange={(e) => setText(e.target.value)} placeholder="Concepto, detalle o proveedor…" className="w-56" />
             <label className="inline-flex h-9 items-center gap-2 text-sm text-gray-700">
               <input type="checkbox" checked={sinComprobante} onChange={(e) => set({ sin_comprobante: e.target.checked ? "1" : "" })} className="size-4 accent-[var(--color-primary)]" />
-              Sin comprobante ni pago
+              Sin comprobante o sin pago
             </label>
           </>
         }
@@ -214,7 +235,10 @@ export default function Gastos() {
                     </div>
                     <div className="mt-1 flex items-center justify-between gap-2 text-xs">
                       <span>{formatPeriod(r.period_id)} · {r.rubro}{r.tickets ? ` · ${r.tickets} compr.` : ""}{r.pagos ? " · pago bancario" : ""}</span>
-                      <StatusTag status={r.verified ? "verificado" : "sin-verificar"} />
+                      <span className="flex flex-wrap justify-end gap-1">
+                        <Missing row={r} />
+                        <StatusTag status={r.verified ? "verificado" : "sin-verificar"} />
+                      </span>
                     </div>
                   </button>
                 </li>
@@ -255,6 +279,7 @@ export default function Gastos() {
                           {r.pagos ? (
                             <span className="inline-flex items-center gap-1 text-xs"><Landmark size={12} aria-hidden />Pago bancario</span>
                           ) : null}
+                          <Missing row={r} />
                         </div>
                       </td>
                     </tr>
@@ -266,6 +291,12 @@ export default function Gastos() {
               <span>
                 {data.data.count.toLocaleString("es-AR")} líneas · total{" "}
                 <span className="tabular font-semibold text-gray-900">{formatMoney(data.data.total)}</span>
+                {data.data.fondo_total ? (
+                  <>
+                    {" "}· Fondo de obra{" "}
+                    <span className="tabular font-semibold text-gray-900">{formatMoney(data.data.fondo_total)}</span>
+                  </>
+                ) : null}
               </span>
               <div className="flex items-center gap-1">
                 <Button variant="ghost" disabled={page <= 1} onClick={() => set({ page: String(page - 1) })} aria-label="Anterior"><ChevronLeft size={16} /></Button>

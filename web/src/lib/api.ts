@@ -47,16 +47,38 @@ export interface ExpenseRow {
   page_id: number | null;
   confidence: number;
   verified: number;
+  fondo: number; // 1 = paid from the Fondo de obra: not part of the month's total
   tickets?: number; // linked receipts
   pagos?: number; // linked bank payments
+  falta_comprobante?: number; // 1 = receipts were uploaded for its month but none is linked
+  falta_pago?: number; // 1 = there is a bank statement for its month but no linked debit
 }
 export interface ExpensePage {
   rows: ExpenseRow[];
   count: number;
   total: number;
+  fondo_total: number; // lines paid from the Fondo de obra, not in `total`
   page: number;
   pageSize: number;
 }
+/** An auditor's observation about the administration's accounts. */
+export type ObservationState = "abierta" | "enviada" | "respondida" | "resuelta" | "descartada";
+export interface Observation {
+  id: string;
+  period_id: string;
+  tipo: string;
+  titulo: string;
+  detalle: string;
+  importe: number | null;
+  estado: ObservationState;
+  fecha: string;
+  respuesta: string | null;
+  fecha_respuesta: string | null;
+  lines: { id: number; period_id: string; rubro: string; concepto: string; detalle: string | null; importe: number }[];
+  tickets: { id: number; fecha: string | null; proveedor: string | null; descripcion: string | null; total: number }[];
+  movements: { id: number; fecha: string; descripcion: string; importe: number }[];
+}
+
 export interface ExpenseDetail extends Omit<ExpenseRow, "tickets" | "pagos"> {
   document_id: number | null;
   page_no: number | null;
@@ -71,7 +93,11 @@ export interface LinkedPayment {
   banco: string | null;
   descripcion: string;
   importe: number;
-  kind: "debito" | "gastos"; // gastos = the statement's commissions and taxes, grouped
+  // gastos = the statement's commissions and taxes, grouped; cheque = a cheque the
+  // consortium issued that no statement shows cleared yet.
+  kind: "debito" | "gastos" | "cheque";
+  cheque_numero: string | null; // a cheque: on a debit, the one it cleared
+  cheque_fecha_pago: string | null;
   items: { descripcion: string; importe: number; cantidad: number }[];
   score: number;
   status: "auto" | "verified";

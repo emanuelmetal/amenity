@@ -212,7 +212,7 @@ def test_payments_match_lines_exactly_and_never_as_sums(monkeypatch):
     ]
     links = {x.line_id: x for x in match_payments(lines, refs)}
     assert links[1].status == "auto" and links[1].ticket_id == by_text["PINTURERIA DEMO SA"].id
-    assert links[2].status == "pending" and lookup[links[2].ticket_id][1].kind == "gastos"
+    assert links[2].status == "pending" and lookup[links[2].ticket_id].mv.kind == "gastos"
     assert 3 not in links
     # Decisions come from review.payments, not from the receipt links.
     review = ReviewState(payments={f"1:{links[1].ticket_id}": "rejected"},
@@ -301,3 +301,21 @@ def test_salary_and_refund_rows_are_blacked_out_on_the_page_too():
         "Saldo al 05/03/2026  1.000,00",
     ]
     assert bank.private_lines(lines) == {0, 1, 3, 4}
+
+
+def test_opening_balance_in_mixed_case():
+    """Banco Roela printed "Saldo Al Inicio" in 2025: still the opening row, not a credit."""
+    st = bank.parse([(n, t.replace("SALDO AL INICIO", "Saldo Al Inicio")) for n, t in pages()])
+    assert st.saldo_inicial == 1_000_000 and st.creditos == 200_000
+
+
+def test_misprinted_closing_balance_needs_a_reviewed_correction():
+    wrong = pages(final="987.900,00")  # the header repeats the first day's balance
+    with pytest.raises(bank.StatementError):
+        bank.parse(wrong)
+    assert bank.parse(wrong, closing=1_056_000).saldo_final == 1_056_000
+    with pytest.raises(bank.StatementError):
+        bank.parse(wrong, closing=1_000_000)  # the correction must equal opening + movements
+    no_checkpoints = [(n, "\n".join(x for x in t.split("\n") if not x.startswith("Saldo al"))) for n, t in wrong]
+    with pytest.raises(bank.StatementError):
+        bank.parse(no_checkpoints, closing=1_056_000)  # nothing else to vouch for the rows

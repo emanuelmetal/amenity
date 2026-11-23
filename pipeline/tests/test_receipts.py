@@ -308,3 +308,97 @@ def test_scanned_receipts_are_private_until_checked_and_blackouts_applied(data_d
     with pymupdf.open(ingest.doc_dir(m) / "public.pdf") as pub:
         pix = pub[0].get_pixmap(dpi=50, clip=pymupdf.Rect(0.1 * 595, 0.14 * 842, 0.5 * 595, 0.16 * 842))
         assert max(pix.samples) < 40  # the area is black
+
+
+def _payroll_bundle(data_dir, private_receipts):
+    from alas3 import extract, ingest, receipts
+    from tests.test_pipeline import liquidacion_pdf
+
+    liquidacion_pdf(data_dir / "inbox/ResumenGastos_012026.pdf")  # SUELDO ENCARGADO 1.000.000,00
+    make_pdf(
+        data_dir / "inbox/comprobantes/c_2026-01.pdf", [["RECIBO DE HABERES", "Neto a cobrar 987.654,32"]]
+    )
+    ms = ingest.ingest_all()
+    comp = next(m for m in ms if m.kind == "comprobantes")
+    assert comp.pages[0].restricted_reason == "payroll"
+    receipts.transcription_path(comp).parent.mkdir(parents=True, exist_ok=True)
+    receipts.transcription_path(comp).write_text(json.dumps({"private_receipts": private_receipts}))
+    return [extract.extract_document(m) for m in ms], comp
+
+
+def test_payroll_total_backs_the_salary_line_without_publishing_the_page(data_dir):
+    from alas3 import ingest, publish
+
+    exts, comp = _payroll_bundle(data_dir, [{"page": 1, "concepto": "sueldo neto", "total": 1000000}])
+    [t] = next(e for e in exts if hasattr(e, "tickets")).tickets
+    assert t.privado and t.proveedor == "Recibo de sueldo (documento privado)" and t.total == 1000000
+    sql = publish.build_sql(ingest.load_manifests())
+    row = next(s for s in sql.splitlines() if "documento privado" in s and "INSERT INTO tickets" in s)
+    assert "NULL, '[]'" in row and "1000000.0" in row  # no page; the line's (public) amount
+    assert "987.654" not in sql and "987654" not in sql and "HABERES" not in sql
+    assert "INSERT INTO expense_ticket_links VALUES" in sql
+
+
+def test_unlinked_payroll_total_is_never_published(data_dir):
+    from alas3 import ingest, publish
+
+    _payroll_bundle(data_dir, [{"page": 1, "concepto": "sueldo neto", "total": 987654.32}])  # matches no line
+    sql = publish.build_sql(ingest.load_manifests())
+    assert "documento privado" not in sql and "987654" not in sql
+
+
+def test_private_receipt_only_from_a_restricted_page(data_dir):
+    from alas3 import extract, ingest, receipts
+
+    make_pdf(data_dir / "inbox/comprobantes/c_2026-01.pdf", [["Factura", "Total 100,00"]])
+    [m] = ingest.ingest_all()
+    receipts.transcription_path(m).parent.mkdir(parents=True, exist_ok=True)
+    receipts.transcription_path(m).write_text(
+        json.dumps({"private_receipts": [{"page": 1, "concepto": "SAC", "total": 100}]})
+    )
+    with pytest.raises(ValueError, match="restricted"):
+        extract.extract_document(m)
+
+
+def test_receipt_month_is_its_own_date_not_the_bundle(data_dir):
+    from alas3 import extract, ingest, receipts
+
+    make_pdf(
+        data_dir / "inbox/comprobantes/c_2026-10.pdf",
+        [["Factura", "Total 100,00"], ["Factura", "Total 200,00"]],
+    )
+    [m] = ingest.ingest_all()
+    assert m.period == "2026-10"
+    receipts.transcription_path(m).parent.mkdir(parents=True, exist_ok=True)
+    receipts.transcription_path(m).write_text(json.dumps({"tickets": [
+        {"page_nos": [1], "total": 100, "fecha": "2026-07-29"},
+        {"page_nos": [2], "total": 200, "fecha": "2027-05-01"},  # misread: after the bundle's next month
+    ]}))  # fmt: skip
+    old, misread = extract.extract_document(m).tickets
+    assert old.period == "2026-07" and misread.period == "2026-10"
+
+
+def test_restricted_scans_still_to_transcribe_until_checked(data_dir):
+    """A scan restricted only because nobody checked it yet is reported as to transcribe
+    (otherwise its receipts stay hidden for good); payroll and manual restrictions are not."""
+    from alas3 import extract, ingest, receipts
+
+    make_pdf(data_dir / "inbox/comprobantes/x_2026-01.pdf", [["a"], ["b"], ["c"], ["d"]])
+    [m] = ingest.ingest_all()
+    for p, reason in zip(m.pages, ("no_text", "qr_not_located", "payroll", "manual"), strict=True):
+        p.restricted, p.restricted_reason = True, reason
+    assert extract.extract_document(m).untranscribed == [1, 2]
+    receipts.transcription_path(m).parent.mkdir(parents=True, exist_ok=True)
+    receipts.transcription_path(m).write_text(json.dumps({
+        "tickets": [{"page_nos": [1], "kind": "recibo", "proveedor": "Gasista", "total": 100}],
+        "checked": {"1": [], "2": []},
+    }))  # fmt: skip
+    for p in m.pages[:2]:  # what re-ingesting a checked scan does
+        p.restricted, p.restricted_reason = False, None
+    # Checked but with nothing transcribed: still to do (receipts or an other_pages entry).
+    assert extract.extract_document(m).untranscribed == [2]
+    receipts.transcription_path(m).write_text(json.dumps({
+        "tickets": [{"page_nos": [1], "kind": "recibo", "proveedor": "Gasista", "total": 100}],
+        "checked": {"1": [], "2": []}, "other_pages": {"2": "foto de una obra"},
+    }))  # fmt: skip
+    assert extract.extract_document(m).untranscribed == []

@@ -192,3 +192,39 @@ def test_concurrent_review_decisions_are_all_kept(data_dir):
     for t in threads:
         t.join()
     assert len(review.load_review().payments) == 30
+
+
+def test_rejecting_one_receipt_of_a_sum_keeps_the_others_proposed():
+    line = LineRef(1, "2026-03", 600.0, "Mechas, lámparas, etc", None)
+    tickets = [TicketRef(i, "2026-03", 200.0, f"Ferretería {i}", None) for i in (10, 11, 12)]
+    assert {x.ticket_id for x in match([line], tickets)} == {10, 11, 12}  # a sum proposal
+    # Without the kept pairs the sum breaks and every receipt drops out of the proposal.
+    rejected_only = ReviewState(links={"1:10": "rejected"})
+    assert not [x for x in match([line], tickets, rejected_only) if x.ticket_id in (11, 12)]
+    review = ReviewState(links={"1:10": "rejected", "1:11": "pending", "1:12": "pending"})
+    links = match([line], tickets, review)
+    assert {(x.ticket_id, x.status) for x in links} == {(11, "pending"), (12, "pending")}
+    # A kept receipt is not offered to another line while undecided.
+    other = LineRef(2, "2026-03", 200.0, "Ferretería 11", None)
+    assert all(x.line_id == 1 for x in match([line, other], tickets, review) if x.ticket_id in (11, 12))
+
+
+def test_old_receipt_matches_a_line_of_its_bundle_month():
+    line = LineRef(1, "2026-10", 11252.19, "Pinturería", None)
+    old = TicketRef(5, "2026-07", 11252.19, "Colores Pinturerías", None, bundle_period="2026-10")
+    assert [x.ticket_id for x in match([line], [old])] == [5]
+    stray = TicketRef(6, "2026-10", 11252.19, "Colores Pinturerías", None, bundle_period="2026-07")
+    assert match([line], [stray]) == []  # matching goes by the bundle, not by the receipt's date
+
+
+def test_private_payroll_receipt_only_backs_its_own_category():
+    """A payslip total read from a private page is never offered for an unrelated line of
+    the same amount (it would be published as backing a plumbing job)."""
+    from dataclasses import replace
+
+    sub = "Sueldos y cargas sociales"
+    priv = replace(T(1, 50000, "Recibo de sueldo (documento privado) sueldo neto", sub=sub), privado=True)
+    plumbing = L(10, 50000, "MANO DE OBRA plomero", sub="Mantenimiento")
+    assert match([plumbing], [priv]) == []
+    salary = L(11, 50000, "SUELDO ENCARGADO mes 01/2026", sub=sub)
+    assert [(x.line_id, x.ticket_id) for x in match([plumbing, salary], [priv])] == [(11, 1)]

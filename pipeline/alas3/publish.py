@@ -23,11 +23,11 @@ from . import wrangler
 from .classify import classify_text
 from .config import OUT, PHASE_KINDS, REPO, WORK
 from .extract import load_extract
-from .ids import expense_line_ids, movement_ids, ticket_ids
+from .ids import expense_line_ids, ticket_ids
 from .ingest import doc_dir, load_manifests
-from .match import collect, collect_movements, match, match_payments
+from .match import AUTO, collect, collect_movements, match, match_payments
 from .redact import redact_text
-from .schemas import Comprobantes, DocumentManifest, Liquidacion, Reglamento, ReviewState
+from .schemas import Comprobantes, DocumentManifest, Liquidacion, ObservationLog, Reglamento, ReviewState
 
 
 def q(v: object) -> str:
@@ -66,8 +66,27 @@ def publishable(manifests: list[DocumentManifest]) -> list[DocumentManifest]:
     return [m for m in manifests if m.kind in PHASE_KINDS]
 
 
-def build_sql(manifests: list[DocumentManifest], review: ReviewState | None = None) -> str:
-    """`review`: human decisions from review.json (verified lines/receipts, link decisions)."""
+def _observations_sql(log: ObservationLog) -> list[str]:
+    """The auditor's observations, replaced in full (observations.json is the source)."""
+    stmts = ["DELETE FROM observations;"]
+    for o in log.observations:
+        stmts.append(
+            "INSERT INTO observations (id, period_id, tipo, titulo, detalle, importe, estado, fecha, respuesta, "
+            "fecha_respuesta, line_ids_json, ticket_ids_json, movement_ids_json) VALUES "
+            f"({q(o.id)}, {q(o.period)}, {q(o.tipo)}, {qr(o.titulo)}, {qr(o.detalle)}, {q(o.importe)}, "
+            f"{q(o.estado)}, {q(o.fecha)}, {qr(o.respuesta or None)}, {q(o.fecha_respuesta)}, "
+            f"{q(json.dumps(o.line_ids))}, {q(json.dumps(o.ticket_ids))}, {q(json.dumps(o.movement_ids))});"
+        )
+    return stmts
+
+
+def build_sql(
+    manifests: list[DocumentManifest],
+    review: ReviewState | None = None,
+    observations: ObservationLog | None = None,
+) -> str:
+    """`review`: human decisions from review.json (verified lines/receipts, link decisions).
+    `observations`: the auditor's log; None leaves the published observations as they are."""
     review = review or ReviewState()
     verified_lines = set(review.lines_verified)
     stmts: list[str] = []
@@ -112,14 +131,14 @@ def build_sql(manifests: list[DocumentManifest], review: ReviewState | None = No
                 verified = ln.verified or lid in verified_lines
                 stmts.append(
                     "INSERT INTO expense_lines (id, period_id, rubro, subcategoria, concepto, detalle, proveedor, cuit, "
-                    "importe, page_id, confidence, verified) VALUES "
+                    "importe, page_id, confidence, verified, fondo) VALUES "
                     f"({lid}, {q(ext.period)}, {qr(ln.rubro)}, {qr(ln.subcategoria)}, {qr(ln.concepto)}, {qr(ln.detalle)}, "
                     f"{qr(ln.proveedor)}, {qr(ln.cuit)}, {q(ln.importe)}, {q(page_id)}, {q(ln.confidence)}, "
-                    f"{q(verified)}) "
+                    f"{q(verified)}, {q(ln.fondo)}) "
                     "ON CONFLICT(id) DO UPDATE SET period_id=excluded.period_id, rubro=excluded.rubro, "
                     "subcategoria=excluded.subcategoria, concepto=excluded.concepto, detalle=excluded.detalle, "
                     "proveedor=excluded.proveedor, cuit=excluded.cuit, importe=excluded.importe, page_id=excluded.page_id, "
-                    "confidence=excluded.confidence, verified=excluded.verified;"
+                    "confidence=excluded.confidence, verified=excluded.verified, fondo=excluded.fondo;"
                 )
             stmts.append(
                 f"DELETE FROM expense_lines WHERE period_id = {q(ext.period)} "
@@ -146,6 +165,8 @@ def build_sql(manifests: list[DocumentManifest], review: ReviewState | None = No
         f"DELETE FROM pages WHERE document_id NOT IN ({ids});",
         f"DELETE FROM documents WHERE id NOT IN ({ids});",
     ]
+    if observations is not None:
+        stmts += _observations_sql(observations)
     stmts.append((REPO / "db" / "rebuild_fts.sql").read_text())
     return "\n".join(stmts) + "\n"
 
@@ -154,6 +175,7 @@ def _receipts_sql(manifests: list[DocumentManifest], review: ReviewState) -> lis
     """Receipts (tickets + items), expense<->receipt links and tags."""
     stmts: list[str] = []
     all_ids: list[int] = []
+    private: dict[int, tuple] = {}  # payroll totals: published only once linked (below)
     for m in manifests:
         ext = load_extract(m)
         if not isinstance(ext, Comprobantes):
@@ -161,6 +183,9 @@ def _receipts_sql(manifests: list[DocumentManifest], review: ReviewState) -> lis
         restricted = {p.page_no for p in m.pages if p.restricted}
         for tid, t in zip(ticket_ids(m.work_dir_name, ext.tickets), ext.tickets, strict=True):
             page_ids = [m.page_id(n) for n in t.page_nos if n not in restricted]
+            if t.privado:
+                private[tid] = (m, t)
+                continue
             if not page_ids:
                 continue  # read from private pages only: never published
             all_ids.append(tid)
@@ -186,13 +211,41 @@ def _receipts_sql(manifests: list[DocumentManifest], review: ReviewState) -> lis
                     "INSERT INTO ticket_items (ticket_id, descripcion, cantidad, importe) VALUES "
                     f"({tid}, {qr(it.descripcion)}, {q(it.cantidad)}, {q(it.importe)});"
                 )
-    stmts.append(f"DELETE FROM tickets WHERE id NOT IN ({','.join(map(str, all_ids)) or 'NULL'});")
-
     # Links are recomputed on every publish; review decisions are inputs to match().
     lines, tickets, lookup = collect(manifests)
+    line_amount = {ln.id: ln.importe for ln in lines}
+    links = match(lines, [t for t in tickets if t.id in set(all_ids) | set(private)], review)
+    # A payroll total (private receipt) is published only when a person confirmed its link or
+    # the match is confident, as "<document> (documento privado)": no page, no CUIT, and as
+    # amount the sum of the lines it backs (already public), never the figure read from the page.
+    for tid, (m, t) in private.items():
+        backs = [
+            x
+            for x in links
+            if x.ticket_id == tid and (x.status == "verified" or (x.status == "auto" and x.score >= AUTO))
+        ]
+        if not backs:
+            continue
+        all_ids.append(tid)
+        total = round(sum(line_amount[x.line_id] for x in backs), 2)
+        stmts.append(
+            "INSERT INTO tickets (id, document_id, page_id, page_ids_json, kind, proveedor, total, descripcion, period_id, "
+            "subcategoria, source, confidence, verified) VALUES "
+            f"({tid}, {m.id}, NULL, '[]', {q(t.kind)}, {q(t.proveedor)}, {q(total)}, {q(t.descripcion)}, {q(t.period)}, "
+            f"{q(t.subcategoria)}, 'manual', 1.0, {q(t.verified or tid in review.tickets_verified)}) "
+            "ON CONFLICT(id) DO UPDATE SET document_id=excluded.document_id, page_id=NULL, page_ids_json='[]', "
+            "kind=excluded.kind, letra=NULL, fecha=NULL, proveedor=excluded.proveedor, cuit=NULL, tipo_cmp=NULL, "
+            "pto_vta=NULL, nro_cmp=NULL, cae=NULL, total=excluded.total, medio_pago=NULL, descripcion=excluded.descripcion, "
+            "period_id=excluded.period_id, subcategoria=excluded.subcategoria, source='manual', confidence=1.0, "
+            "verified=excluded.verified;"
+        )
+        stmts.append(f"DELETE FROM ticket_items WHERE ticket_id = {tid};")
+    stmts.append(f"DELETE FROM tickets WHERE id NOT IN ({','.join(map(str, all_ids)) or 'NULL'});")
     published = set(all_ids)
     stmts.append("DELETE FROM expense_ticket_links;")
-    for ln in match(lines, [t for t in tickets if t.id in published], review):
+    for ln in links:
+        if ln.ticket_id not in published or (ln.ticket_id in private and ln.status == "pending"):
+            continue
         # 'pending' links are stored as 'auto' with their score: the site labels low scores.
         status = "verified" if ln.status == "verified" else "auto"
         stmts.append(
@@ -221,29 +274,33 @@ def _receipts_sql(manifests: list[DocumentManifest], review: ReviewState) -> lis
 
 
 def _bank_sql(manifests: list[DocumentManifest], lines: list, review: ReviewState) -> list[str]:
-    """Bank debits (payment evidence) and their links to expense lines, rebuilt on every publish."""
+    """Payment evidence (bank debits, cheques not cleared yet) and its links to expense lines,
+    rebuilt on every publish."""
+    from .payments import collect_payments
+
     stmts = ["DELETE FROM expense_payment_links;", "DELETE FROM bank_movements;"]
     published: set[int] = set()
-    for m in manifests:
-        ext = load_extract(m)
-        if not isinstance(ext, Comprobantes):
-            continue
-        restricted = {p.page_no for p in m.pages if p.restricted}
-        for st in ext.bank:
-            for mid, mv in zip(movement_ids(m.work_dir_name, st.movements), st.movements, strict=True):
-                page_ids = [m.page_id(n) for n in mv.page_nos if n not in restricted]
-                if not page_ids:
-                    continue  # read from private pages only: never published (as with receipts)
-                published.add(mid)
-                items = [{"descripcion": redact_text(i.descripcion), "importe": i.importe, "cantidad": i.cantidad}
-                         for i in mv.items]  # fmt: skip
-                stmts.append(
-                    "INSERT INTO bank_movements (id, document_id, page_id, page_ids_json, period_id, fecha, banco, "
-                    "comprobante, codigo, descripcion, importe, kind, items_json) VALUES "
-                    f"({mid}, {m.id}, {q(page_ids[0] if page_ids else None)}, {q(json.dumps(page_ids))}, "
-                    f"{q(mv.period)}, {q(mv.fecha)}, {qr(st.banco)}, {q(mv.comprobante)}, {q(mv.codigo)}, "
-                    f"{qr(mv.descripcion)}, {q(mv.importe)}, {q(mv.kind)}, {q(json.dumps(items, ensure_ascii=False))});"
-                )
+    for p in collect_payments(manifests):
+        mv = p.mv
+        visible = [
+            (pm, n) for pm, n in p.pages if not any(pg.page_no == n and pg.restricted for pg in pm.pages)
+        ]
+        own = [pm.page_id(n) for pm, n in visible if pm is p.m]  # its statement page, or the cheque's photo
+        if not own:
+            continue  # read from private pages only: never published (as with receipts)
+        page_ids = [pm.page_id(n) for pm, n in visible]
+        published.add(p.id)
+        items = [{"descripcion": redact_text(i.descripcion), "importe": i.importe, "cantidad": i.cantidad}
+                 for i in mv.items]  # fmt: skip
+        c = p.cheque
+        stmts.append(
+            "INSERT INTO bank_movements (id, document_id, page_id, page_ids_json, period_id, fecha, banco, "
+            "comprobante, codigo, descripcion, importe, kind, items_json, cheque_numero, cheque_fecha_pago) VALUES "
+            f"({p.id}, {p.m.id}, {q(own[0])}, {q(json.dumps(page_ids))}, "
+            f"{q(mv.period)}, {q(mv.fecha)}, {qr(p.banco)}, {q(mv.comprobante)}, {q(mv.codigo)}, "
+            f"{qr(mv.descripcion)}, {q(mv.importe)}, {q(mv.kind)}, {q(json.dumps(items, ensure_ascii=False))}, "
+            f"{q(c.numero if c else None)}, {q(c.fecha_pago if c else None)});"
+        )
     movements, _ = collect_movements(manifests)
     for ln in match_payments(lines, [mv for mv in movements if mv.id in published], review):
         status = "verified" if ln.status == "verified" else "auto"
@@ -293,9 +350,13 @@ def publish(local: bool) -> None:
     # 2. database
     OUT.mkdir(parents=True, exist_ok=True)
     sql_path = OUT / "publish.sql"
-    from .review import load_review
+    from .match import collect_movements
+    from .observations import load_observations
+    from .review import sync_cheque_decisions
 
-    sql_path.write_text(build_sql(manifests, load_review()))
+    sql_path.write_text(
+        build_sql(manifests, sync_cheque_decisions(collect_movements(manifests)[1]), load_observations())
+    )
     wrangler.d1_file(sql_path, local)
 
     # 3. everything uploaded before that is no longer published (restricted pages, dropped documents)

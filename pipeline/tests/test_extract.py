@@ -1,8 +1,9 @@
 from alas3 import liquidacion
 from alas3.classify import classify_text
 from alas3.extract import parse_reglamento
+from alas3.ids import expense_line_ids
 from alas3.schemas import Liquidacion, LiquidacionLine, RubroTotal
-from alas3.validate import check_liquidacion, check_resumen
+from alas3.validate import check_fondo, check_liquidacion, check_resumen
 
 
 def test_reglamento_articles_split_across_pages():
@@ -151,3 +152,44 @@ def test_resumen_balance_mismatch_is_reported():
     bad = [ln.replace("1.650.000,00", "1.600.000,00") for ln in SUMMARY]
     liq = liquidacion.parse("2026-10", [(1, "\n".join(bad))])
     assert any("saldo final" in p for p in check_resumen(liq))
+
+
+FONDO_P1 = """DETALLE DE LOS GASTOS AL MES: DICIEMBRE DE 2025
+Concepto Gastos  Detalle Gastos  Gastos
+REPARACIONES Y TRABAJOS VS.
+MANO DE OBRA TRABAJO DE  Pintura  1,000.00
+Total de Gastos del Período: 12/2025  1,000.00
+FONDO DE RESERVA  INGRESOS  EGRESOS
+SALDO INICIAL 'FONDO DE RESERVA' AL 12/2025  10.000,00
+345 CTA INVERSION OBRA EXPLANADA  500,00
+ingreso de fondo corriente para obra  2.000,00"""
+FONDO_P2 = """ADMINISTRACIÓN DE CONSORCIOS  Complejo Edilicio
+168 MANO DE OBRA TRABAJO DE (cuota 5 obra explanada)  7.000,00
+503 APORTES ADMINISTRACION CENTRAL (obra explanada)  1.500,00
+Obra cochera  300,00
+SALDO FINAL 'FONDO DE RESERVA' AL 12/2025  3.700,00
+TOTAL EXPENSAS PRORRATEADAS:  $ 1.000,00"""
+
+
+def test_fondo_outflows_become_fund_lines_outside_the_month_total():
+    liq = liquidacion.parse("2025-12", [(1, FONDO_P1), (2, FONDO_P2)])
+    fondo = [ln for ln in liq.lines if ln.fondo]
+    # 10.000 + 2.500 in - 8.800 out = 3.700: the split comes from the balance.
+    assert [(ln.concepto, ln.detalle, ln.importe, ln.page_no) for ln in fondo] == [
+        ("MANO DE OBRA TRABAJO DE", "cuota 5 obra explanada", 7000.0, 2),
+        ("APORTES ADMINISTRACION CENTRAL", "obra explanada", 1500.0, 2),
+        ("Obra cochera", None, 300.0, 2),
+    ]
+    assert {ln.rubro for ln in fondo} == {liquidacion.FONDO_RUBRO}
+    assert [i.tipo for i in liq.fondo.items] == ["ingreso", "ingreso", "egreso", "egreso", "egreso"]
+    assert check_liquidacion(liq) == [] and check_fondo(liq) == []  # total = ordinary lines only
+    # Ordinary lines keep their ids; fund lines live in their own id namespace.
+    plain = liquidacion.parse("2025-12", [(1, FONDO_P1.split("FONDO DE RESERVA")[0])])
+    assert expense_line_ids(liq)[0] == expense_line_ids(plain)[0]
+    assert len(set(expense_line_ids(liq))) == len(liq.lines)
+
+
+def test_fondo_unbalanced_is_reported():
+    liq = liquidacion.parse("2025-12", [(1, FONDO_P1), (2, FONDO_P2.replace("3.700,00", "3.000,00"))])
+    assert not [ln for ln in liq.lines if ln.fondo]
+    assert check_fondo(liq)

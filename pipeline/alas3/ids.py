@@ -24,6 +24,8 @@ def expense_line_ids(liq: Liquidacion) -> list[int]:
     out: list[int] = []
     for ln in liq.lines:
         key = (liq.period, ln.concepto, ln.detalle, f"{ln.importe:.2f}")
+        if ln.fondo:  # its own namespace, so the ids of ordinary lines never change
+            key = ("fondo", *key)
         out.append(stable_id("line", *key, seen[key]))
         seen[key] += 1
     return out
@@ -51,13 +53,16 @@ def ticket_ids(sha16: str, tickets: list) -> list[int]:
     Fiscal vouchers: document + point of sale + number + first page (two small vendors in
     one bundle can share point of sale 1 / number 123; the voucher type is left out because
     it is missing when a QR stops decoding). Others: document + first page + position on
-    that page.
+    that page. Private payroll receipts (several concepts on one payslip page): document +
+    page + concept + month, so reordering `private_receipts` never swaps their ids.
     """
     seen: Counter[tuple] = Counter()
     out: list[int] = []
     for t in tickets:
-        if t.pto_vta is not None and t.nro_cmp is not None:
-            key: tuple = ("v", sha16, t.pto_vta, t.nro_cmp, min(t.page_nos) if t.page_nos else 0)
+        if getattr(t, "privado", False):
+            key: tuple = ("priv", sha16, t.page_nos[0] if t.page_nos else 0, t.descripcion, t.period)
+        elif t.pto_vta is not None and t.nro_cmp is not None:
+            key = ("v", sha16, t.pto_vta, t.nro_cmp, min(t.page_nos) if t.page_nos else 0)
         else:
             key = ("p", sha16, t.page_nos[0] if t.page_nos else 0)
         out.append(stable_id("ticket", *key, seen[key]))

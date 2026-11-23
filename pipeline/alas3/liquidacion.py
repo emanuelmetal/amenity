@@ -10,7 +10,10 @@ one page per month:
     SUELDO ENCARGADO  mes 01/2026  1,000,000.00  <- concepto  detalle  importe (US format!)
     ...
     Total de Gastos del Período: 01/2026  1,234,567.89
-    FONDO DE OBRA ...                                  <- ignored
+    FONDO DE OBRA  INGRESOS  EGRESOS                   <- fund ledger (parse_fondo): its outflows
+    SALDO INICIAL 'FONDO DE OBRA' AL 10/2026  512.933,19     become lines with fondo=True, kept
+    168 MANO DE OBRA TRABAJO DE (Obra explanada)  300.000,00  out of the month's total
+    SALDO FINAL 'FONDO DE OBRA' AL 10/2026  212.933,19
     Unidades con deudas ...                            <- never parsed (and hidden by redact.page_policy)
 
 The older generic layout ("RUBRO 1 - X" ... "TOTAL RUBRO 1") is still accepted.
@@ -22,7 +25,7 @@ from __future__ import annotations
 import re
 
 from .redact import _DEBT_START
-from .schemas import Liquidacion, LiquidacionLine, Resumen, ResumenItem, RubroTotal
+from .schemas import Fondo, Liquidacion, LiquidacionLine, Resumen, ResumenItem, RubroTotal
 
 TOLERANCE = 0.01
 
@@ -129,6 +132,100 @@ def parse_resumen(pages: list[tuple[int, str]]) -> Resumen | None:
     return res
 
 
+FONDO_RUBRO = "Fondo de obra"
+_FONDO_START = re.compile(r"(?i)^\s*fondo\s+de\s+(obra|reserva)\b")
+_FONDO_END = re.compile(r"(?i)^\s*(unidades\s+(con\s+deudas?|en\s+mora)|total\s+expensas)")
+_ACCOUNT_CODE = re.compile(r"^\d{2,4}\s+(?=\D)")  # "168 MANO DE OBRA ..." (the administrator's account)
+_TRAILING_PAREN = re.compile(r"^(?P<concepto>.*?)\s*\((?P<detalle>[^()]*)\)\s*$")
+
+
+def _split_fondo(
+    items: list[tuple[str, float, int]], saldo_inicial: float, saldo_final: float
+) -> set[int] | None:
+    """Indexes of the fund's outflows. The text layer loses the Ingresos/Egresos column, but
+    saldo inicial + ingresos - egresos = saldo final fixes their sum. Among the subsets that
+    add up, prefer the one with more account-coded items ("168 MANO DE OBRA ..."; income
+    rows are usually free text). None when nothing, or more than one best subset, adds up."""
+    from itertools import combinations
+
+    total = sum(a for _, a, _ in items)
+    out = round((total - (saldo_final - saldo_inicial)) / 2, 2)
+    if len(items) > 16:
+        return None
+    best: list[tuple[int, set[int]]] = []
+    for k in range(len(items) + 1):
+        for combo in combinations(range(len(items)), k):
+            if abs(sum(items[i][1] for i in combo) - out) <= TOLERANCE:
+                coded = sum(1 for i in combo if _ACCOUNT_CODE.match(items[i][0]))
+                best.append((coded, set(combo)))
+    if not best:
+        return None
+    top = max(c for c, _ in best)
+    winners = [s for c, s in best if c == top]
+    return winners[0] if len(winners) == 1 else None
+
+
+def parse_fondo(pages: list[tuple[int, str]]) -> tuple[Fondo | None, list[LiquidacionLine]]:
+    """The fund ledger; it may continue on the next page (after the page's letterhead)."""
+    fondo: Fondo | None = None
+    items: list[tuple[str, float, int]] = []
+    done = False
+    for page_no, text in pages:
+        for raw in text.splitlines():
+            if fondo is None:
+                if _FONDO_START.match(raw):
+                    fondo = Fondo()
+                continue
+            if _FONDO_END.match(raw) or _DEBT_START.search(raw):
+                done = True
+                break
+            am = _AMOUNT_AT_END.match(raw)
+            if not am:
+                continue  # column header, letterhead of the next page
+            label, amount = am.group("text").strip(), parse_amount(am.group("amount"))
+            if _SALDO_INICIAL.match(label):
+                fondo.saldo_inicial = amount
+            elif _SALDO_FINAL.match(label):
+                fondo.saldo_final = amount
+                done = True
+                break
+            else:
+                items.append((label, amount, page_no))
+        if done:
+            break
+    if fondo is None:
+        return None, []
+    egresos = (
+        _split_fondo(items, fondo.saldo_inicial, fondo.saldo_final)
+        if fondo.saldo_inicial is not None and fondo.saldo_final is not None
+        else None
+    )
+    egresos = egresos or set()  # unresolved: validate.check_fondo reports it
+    fondo.items = [
+        ResumenItem(concepto=c, importe=a, tipo="egreso" if i in egresos else "ingreso")
+        for i, (c, a, _) in enumerate(items)
+    ]
+    lines = []
+    for i, (label, amount, page_no) in enumerate(items):
+        if i not in egresos:
+            continue
+        text = _ACCOUNT_CODE.sub("", label).strip()
+        pm = _TRAILING_PAREN.match(text)
+        concepto, detalle = (
+            (pm.group("concepto"), pm.group("detalle").strip())
+            if pm and pm.group("concepto")
+            else (text, None)
+        )
+        cuit = _CUIT.search(label)
+        lines.append(
+            LiquidacionLine(
+                rubro=FONDO_RUBRO, concepto=concepto, detalle=detalle or None, cuit=cuit.group(0) if cuit else None,
+                importe=amount, page_no=page_no, confidence=0.8, fondo=True,
+            )
+        )  # fmt: skip
+    return fondo, lines
+
+
 def parse(period: str, pages: list[tuple[int, str]]) -> Liquidacion:
     lines: list[LiquidacionLine] = []
     rubro_totals: list[RubroTotal] = []
@@ -188,6 +285,12 @@ def parse(period: str, pages: list[tuple[int, str]]) -> Liquidacion:
                     confidence=0.8,
                 )
             )
+    fondo, fondo_lines = parse_fondo(pages)
     return Liquidacion(
-        period=period, total=total, rubro_totals=rubro_totals, lines=lines, resumen=parse_resumen(pages)
+        period=period,
+        total=total,
+        rubro_totals=rubro_totals,
+        lines=lines + fondo_lines,
+        resumen=parse_resumen(pages),
+        fondo=fondo,
     )

@@ -55,13 +55,13 @@ export default function Inicio() {
         />
         <KpiTile
           icon={<FileCheck2 size={18} />}
-          label="Gasto con comprobante"
+          label="Gasto con comprobante y pago"
           value={coverage != null ? `${Math.round(coverage * 100)}%` : "—"}
           footer={<span>{withReceipts ? `en ${formatPeriod(withReceipts.id)}` : "Todavía no hay comprobantes cargados"}</span>}
         />
         <KpiTile
           icon={<FileWarning size={18} />}
-          label="Gastos sin comprobante"
+          label="Gastos sin respaldo completo"
           value={withReceipts ? withReceipts.lineas_sin_comprobante : "—"}
           footer={
             withReceipts ? (

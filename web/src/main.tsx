@@ -10,6 +10,7 @@ import Comprobantes from "./pages/Comprobantes";
 import ComoFunciona from "./pages/ComoFunciona";
 import Gastos from "./pages/Gastos";
 import Inicio from "./pages/Inicio";
+import Observaciones from "./pages/Observaciones";
 import Pagina from "./pages/Pagina";
 import Reglamento from "./pages/Reglamento";
 import "./styles.css";
@@ -26,6 +27,7 @@ const router = createBrowserRouter([
       { path: "/gastos", element: <Gastos /> },
       { path: "/comprobantes", element: <Comprobantes /> },
       { path: "/analisis", element: <Analisis /> },
+      { path: "/observaciones", element: <Observaciones /> },
       { path: "/reglamento", element: <Reglamento /> },
       { path: "/reglamento/:id", element: <Reglamento /> },
       { path: "/buscar", element: <Buscar /> },

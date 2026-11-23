@@ -1,6 +1,6 @@
 # Torre 3 portal. See CLAUDE.md. LOCAL=1 targets local wrangler state.
-.PHONY: setup migrate migrate-local seed-local ingest validate review match publish publish-local build dev deploy \
-        new-link rotate-link admin-link unit-link revoke-link list-links backup test test-py test-web
+.PHONY: setup migrate migrate-local seed-local ingest validate review match observations ejercicio publish publish-local build dev deploy \
+        new-link rotate-link admin-link unit-link revoke-link list-links backup review-notes test test-py test-web
 
 PY := cd pipeline && uv run alas3
 LOCALFLAG := $(if $(LOCAL),--local,)
@@ -25,8 +25,14 @@ validate:
 	$(PY) validate
 review:
 	$(PY) review
+review-notes:
+	$(PY) review-notes
 match:
 	$(PY) match
+observations:
+	$(PY) observations $(ARGS)
+ejercicio:
+	$(PY) ejercicio $(if $(DESDE),--desde $(DESDE),)
 publish:
 	$(PY) publish
 publish-local:
@@ -59,7 +65,7 @@ backup:
 
 # d1 export refuses databases with virtual tables unless they are left out; search_fts is rebuilt from these.
 BACKUP_TABLES := documents pages periods expense_lines tickets ticket_items expense_ticket_links tags \
-                 entity_tags reglamento_articles actas acta_items access_codes comments
+                 entity_tags reglamento_articles actas acta_items access_codes comments observations
 
 test: test-py test-web
 test-py:

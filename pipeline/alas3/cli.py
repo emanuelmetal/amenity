@@ -55,7 +55,7 @@ def cmd_validate(_: argparse.Namespace) -> int:
     from .extract import load_extract
     from .ingest import load_manifests
     from .schemas import Liquidacion
-    from .validate import check_liquidacion, check_resumen
+    from .validate import check_fondo, check_liquidacion, check_resumen
 
     problems: list[str] = []
     checked = 0
@@ -63,11 +63,21 @@ def cmd_validate(_: argparse.Namespace) -> int:
         ext = load_extract(m)
         if isinstance(ext, Liquidacion):
             checked += 1
-            problems += check_liquidacion(ext) + check_resumen(ext)
+            problems += check_liquidacion(ext) + check_resumen(ext) + check_fondo(ext)
     from .review import dangling_decisions
 
     dangling = dangling_decisions()
     problems += [f"review.json: {d} refers to something that no longer exists" for d in dangling]
+    from .golden import THRESHOLD
+    from .golden import run as golden_run
+
+    score = golden_run()
+    if score is not None:
+        print(f"golden set: {score.correct}/{score.checked} fields right ({score.accuracy:.1%})")
+        for miss in score.misses:
+            print(f"  miss {miss}")
+        if score.accuracy < THRESHOLD:
+            problems.append(f"golden set accuracy {score.accuracy:.1%} < {THRESHOLD:.0%}")
     for p in problems:
         print(f"FAIL {p}")
     print(f"{checked} liquidaciones checked, {len(problems)} problems")
@@ -98,6 +108,9 @@ def cmd_match(_: argparse.Namespace) -> int:
     for period in sorted(periods_with_receipts):
         pl = [ln for ln in lines if ln.period == period]
         total = sum(ln.importe for ln in pl)
+        if not pl or not total:
+            print(f"{period}: receipts but no liquidación lines")
+            continue
         covered = sum(ln.importe for ln in pl if ln.id in by_line)
         pending = sum(1 for ln in pl if ln.id in by_line and min(x.score for x in by_line[ln.id]) < AUTO
                       and not all(x.status == "verified" for x in by_line[ln.id]))  # fmt: skip
@@ -110,7 +123,9 @@ def cmd_match(_: argparse.Namespace) -> int:
 
     movements, mlookup = collect_movements(load_manifests())
     if movements:
-        pay = match_payments(lines, movements, load_review())
+        from .review import sync_cheque_decisions
+
+        pay = match_payments(lines, movements, sync_cheque_decisions(mlookup))
         auto = sum(1 for x in pay if x.status in ("auto", "verified"))
         print(f"{len(movements)} bank payments, {auto} linked, {len(pay) - auto} to review")
         no_backing = [ln for ln in lines if ln.period in periods_with_receipts | {m.period for m in movements}
@@ -120,10 +135,51 @@ def cmd_match(_: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_review_notes(args: argparse.Namespace) -> int:
+    """Rejected links with the reviewer's reason and enough context to fix the data."""
+    from .review import queue
+
+    rows = queue()["rejections"]
+    noted = [r for r in rows if r["note"]]
+    for r in noted:
+        n, ln, it = r["note"], r["line"], r["item"]
+        pages = ", ".join(f"{p['doc']} p.{p['page']}" for p in it["pages"]) or "sin página pública"
+        print(f"[{n['fecha']}] {n['motivo']}" + (f": {n['detalle']}" if n["detalle"] else ""))
+        print(f"  gasto     {ln['id']}  {ln['period']}  {ln['concepto']}" + (f" — {ln['detalle']}" if ln["detalle"] else "")
+              + f"  ${ln['importe']:,.2f}")  # fmt: skip
+        what = "pago" if r["kind"] == "payment" else "comprobante"
+        print(f"  {what:<9} {it['id']}  {it.get('fecha') or it.get('period') or ''}  {it.get('proveedor') or ''}  "
+              f"${(it.get('total') or 0):,.2f}  ({it.get('kind') or ''}; {pages})")  # fmt: skip
+        if it.get("descripcion"):
+            print(f"            {it['descripcion'][:160]}")
+    print(f"{len(noted)} rejections with a reason, {len(rows) - len(noted)} without")
+    return 0
+
+
 def cmd_publish(args: argparse.Namespace) -> int:
     from .publish import publish
 
     publish(local=args.local)
+    return 0
+
+
+def cmd_observations(args: argparse.Namespace) -> int:
+    """The auditor's observations log; --draft prints the selected ones for the administrator."""
+    from .observations import draft, load_observations, report
+
+    log = load_observations()
+    if args.draft:
+        print(draft(log, tuple(args.estado or ["abierta"]), args.period), end="")
+    else:
+        print(report(log))
+    return 0
+
+
+def cmd_ejercicio(args: argparse.Namespace) -> int:
+    """Year-close check: the administrator's balance and the evidence of the whole ejercicio."""
+    from .yearclose import report
+
+    print(report(args.desde), end="")
     return 0
 
 
@@ -155,8 +211,21 @@ def main(argv: list[str] | None = None) -> int:
     s.add_argument("--port", type=int, default=8790)
     s.set_defaults(fn=cmd_review)
 
+    s = sub.add_parser("review-notes", help="rejected links with the reviewer's reasons")
+    s.set_defaults(fn=cmd_review_notes)
+
     s = sub.add_parser("match", help="receipt coverage report")
     s.set_defaults(fn=cmd_match)
+
+    s = sub.add_parser("observations", help="auditor's observations log (data/work/observations.json)")
+    s.add_argument("--draft", action="store_true", help="print them as a message for the administrator")
+    s.add_argument("--period", help="only this month (YYYY-MM)")
+    s.add_argument("--estado", action="append", help="states to include in --draft (default: abierta)")
+    s.set_defaults(fn=cmd_observations)
+
+    s = sub.add_parser("ejercicio", help="year-close check: balance + evidence of one ejercicio (Sep–Aug)")
+    s.add_argument("--desde", help="first month of the ejercicio, e.g. 2025-09 (default: latest balance)")
+    s.set_defaults(fn=cmd_ejercicio)
 
     s = sub.add_parser("publish", help="upload to D1 + R2")
     s.add_argument("--local", action="store_true", help="target local wrangler state instead of Cloudflare")

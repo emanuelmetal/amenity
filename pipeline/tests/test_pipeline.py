@@ -100,6 +100,25 @@ def test_manual_overrides(data_dir, monkeypatch):
     assert [p.restricted_reason for p in m.pages] == [None, "manual"]
 
 
+def test_full_override_publishes_a_page_unredacted(data_dir, monkeypatch):
+    from alas3 import ingest, ocr
+
+    monkeypatch.setattr(ocr, "ocr_document", lambda *_: None)
+    text = f"ARTICULO 1: el titular CUIL {CUIL} declara lo siguiente"
+    pdf = make_pdf(data_dir / "inbox/reglamento/r.pdf", [[text], [text], [text]])
+    sha16 = ingest.sha256_file(pdf)[:16]
+    (data_dir / "work").mkdir(exist_ok=True)
+    # Page 2: the owner decided to publish it as sent; page 3: restrict wins over full.
+    (data_dir / "work/restrict.json").write_text(json.dumps({sha16: {"full": [2, 3], "restrict": [3]}}))
+    [m] = ingest.ingest_all()
+    p1, p2, p3 = m.pages
+    assert CUIL not in p1.text and p1.redacted_strings == 1  # the automatic masking, as always
+    assert CUIL in p2.text and not p2.restricted and p2.redacted_strings == 0
+    assert p3.restricted_reason == "manual"
+    with pymupdf.open(ingest.doc_dir(m) / "public.pdf") as pub:
+        assert CUIL not in pub[0].get_text() and CUIL in pub[1].get_text()  # no blackout on page 2
+
+
 def test_only_phase_kinds_are_ingested_and_published(data_dir):
     from alas3 import ingest, publish
 

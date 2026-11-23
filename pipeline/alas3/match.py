@@ -52,6 +52,13 @@ class TicketRef:
     total: float
     text: str  # proveedor + descripcion
     subcategoria: str | None
+    bundle_period: str | None = None  # month of the bundle that brought it (receipts)
+    # How many months after the line it may be dated: a cheque (deferred payment) is paid,
+    # and debited, months after the expense it pays. 0 for receipts and other debits.
+    months_after: int = 0
+    # Read from a private payroll page: it may only back a line of its own category (a
+    # payslip total must never be offered as the receipt of, say, a plumbing job).
+    privado: bool = False
 
 
 @dataclass
@@ -95,6 +102,27 @@ def _prev(period: str) -> str:
     return f"{y - 1}-12" if m == 1 else f"{y}-{m - 1:02d}"
 
 
+def _months(period: str) -> int:
+    y, m = map(int, period.split("-"))
+    return y * 12 + m
+
+
+def _in_window(t: TicketRef, period: str) -> bool:
+    """Evidence of the line's month or the one before; a cheque also up to `months_after` later."""
+    p = t.bundle_period or t.period
+    if not p:
+        return False
+    return -1 <= _months(p) - _months(period) <= t.months_after
+
+
+CHEQUE_MONTHS_AFTER = 3
+
+
+def _gap(ln: LineRef, t: TicketRef) -> int:
+    """Months between a line and its evidence (two cheques of the same amount, one a month)."""
+    return abs(_months(t.bundle_period or t.period or ln.period) - _months(ln.period))
+
+
 def _pair_score(line: LineRef, t: TicketRef) -> float:
     diff = abs(line.importe - t.total)
     if diff <= CENT:
@@ -136,7 +164,7 @@ def _subset(target: float, values: list[tuple[int, float]], max_k: int) -> list[
     return found
 
 
-ALL_PASSES = ("exact", "sum", "split", "near")
+ALL_PASSES = ("exact", "sum", "split", "near", "year")
 PAYMENT_PASSES = ("exact", "near")  # bank debits: never combine transfers into sums
 
 
@@ -149,6 +177,7 @@ def match(
     """Also used for bank payments: `tickets` = debits, `review.links` = payment decisions."""
     review = review or ReviewState()
     rejected = review.rejected_pairs()
+    rejected |= {(ln.id, t.id) for t in tickets if t.privado for ln in lines if ln.subcategoria != t.subcategoria}
     verified = review.verified_pairs()
     links: list[Link] = []
     used_lines: set[int] = set()
@@ -170,6 +199,19 @@ def match(
         ticket_left[tid] -= sum(line_by_id[x.line_id].importe for x in links if x.ticket_id == tid)
     used_lines |= {lid for lid, left in line_left.items() if left <= CENT}
     used_tickets |= {tid for tid, left in ticket_left.items() if left <= CENT}
+    # Kept proposals (another receipt of the same proposal was rejected): proposed again for
+    # their line, and not offered to any other line while undecided.
+    for lid, tid in sorted(review.held_pairs()):
+        if (
+            lid in line_by_id
+            and tid in ticket_by_id
+            and (lid, tid) not in rejected
+            and tid not in used_tickets
+        ):
+            links.append(
+                Link(lid, tid, REVIEW, "pending", reason="propuesta que quedó al rechazar otro comprobante")
+            )
+            used_tickets.add(tid)
     already = {(x.line_id, x.ticket_id) for x in links}
 
     periods = sorted({ln.period for ln in lines})
@@ -183,7 +225,10 @@ def match(
         p_tickets = [
             replace(t, total=round(ticket_left[t.id], 2))
             for t in tickets
-            if t.period in (period, _prev(period)) and t.id not in used_tickets
+            # By the bundle's month (an old receipt is billed in the liquidación it came with);
+            # its own date's month is for showing it, and would make monthly same-amount
+            # vendors ambiguous.
+            if _in_window(t, period) and t.id not in used_tickets
         ]
         rejected = rejected | already  # never propose a pair twice
 
@@ -195,7 +240,7 @@ def match(
                 for t in p_tickets
                 if (ln.id, t.id) not in rejected and abs(ln.importe - t.total) <= CENT
             ),
-            key=lambda x: -x[0],
+            key=lambda x: (-x[0], _gap(x[1], x[2])),  # equal score: the closest month first
         )
         for score, ln, t in pairs:
             if score < REVIEW or ln.id in used_lines or t.id in used_tickets:
@@ -274,7 +319,7 @@ def match(
                 for t in p_tickets
                 if (ln.id, t.id) not in rejected and ln.id not in used_lines and t.id not in used_tickets
             ),
-            key=lambda x: -x[0],
+            key=lambda x: (-x[0], _gap(x[1], x[2])),  # equal score: the closest month first
         ):
             if score < REVIEW or ln.id in used_lines or t.id in used_tickets or "near" not in passes:
                 continue
@@ -285,11 +330,54 @@ def match(
             )
             used_lines.add(ln.id)
             used_tickets.add(t.id)
+    if "year" in passes:
+        links += _year_pass(lines, tickets, line_left, ticket_left, used_lines, used_tickets, rejected | already)
     return links
+
+
+def _year_pass(lines, tickets, line_left, ticket_left, used_lines, used_tickets, rejected) -> list[Link]:
+    """5. The administrator may hand in a late or lost receipt in any month of the ejercicio
+    (the rendición is yearly, CCyC art. 2067 e): a line still without a receipt is offered
+    one of the same ejercicio from outside the usual window, with the exact amount and the
+    vendor or the category agreeing; the closest month wins, a tie is left for a human.
+    Always for review, never automatic."""
+    from .config import ejercicio
+
+    def months_away(ln: LineRef, t: TicketRef) -> int:
+        return min(abs(_months(p) - _months(ln.period)) for p in (t.period, t.bundle_period) if p)
+
+    out: list[Link] = []
+    for ln in sorted(lines, key=lambda x: (x.period, -x.importe)):
+        if ln.id in used_lines:
+            continue
+        left = round(line_left[ln.id], 2)
+        cands = [
+            t for t in tickets
+            if t.id not in used_tickets and (ln.id, t.id) not in rejected and not _in_window(t, ln.period)
+            # handed in late, maybe, but not dated after the gasto it pays
+            and t.period is not None and t.period <= ln.period and ejercicio(t.period) == ejercicio(ln.period)
+            and (t.bundle_period is None or t.period <= t.bundle_period)  # a date after its bundle: misread
+            and abs(round(ticket_left[t.id], 2) - left) <= CENT
+            and (vendor_similarity(ln.text, t.text) >= 0.5 or (ln.subcategoria and ln.subcategoria == t.subcategoria))
+        ]  # fmt: skip
+        if not cands:
+            continue
+        best = min(months_away(ln, t) for t in cands)
+        closest = [t for t in cands if months_away(ln, t) == best]
+        if len(closest) != 1:
+            continue  # two equal candidates as close: a human decides
+        t = closest[0]
+        score = _pair_score(replace(ln, importe=left), replace(t, total=left))
+        out.append(Link(ln.id, t.id, round(min(score, AUTO - 0.01), 3), "pending",
+                        reason="mismo importe, otro mes del ejercicio"))  # fmt: skip
+        used_lines.add(ln.id)
+        used_tickets.add(t.id)
+    return out
 
 
 def collect(manifests) -> tuple[list[LineRef], list[TicketRef], dict]:
     """Lines and receipts of all published documents, plus id -> record lookups."""
+    from .classify import classify_text
     from .config import PHASE_KINDS
     from .extract import load_extract
     from .ids import expense_line_ids, ticket_ids
@@ -305,14 +393,17 @@ def collect(manifests) -> tuple[list[LineRef], list[TicketRef], dict]:
         if isinstance(ext, Liquidacion):
             for lid, ln in zip(expense_line_ids(ext), ext.lines, strict=True):
                 text = " ".join(x for x in (ln.concepto, ln.detalle, ln.proveedor) if x)
-                lines.append(LineRef(lid, ext.period, ln.importe, text, ln.subcategoria))
+                # Unclassified lines (extract without the CLI's classify step) get their category
+                # here: the private-receipt guard in match() relies on it.
+                sub = ln.subcategoria or classify_text(text)[0]
+                lines.append(LineRef(lid, ext.period, ln.importe, text, sub))
                 lookup["lines"][lid] = (m, ln)
         elif isinstance(ext, Comprobantes):
             for tid, t in zip(ticket_ids(m.work_dir_name, ext.tickets), ext.tickets, strict=True):
                 if t.total is None:
                     continue
                 text = " ".join(x for x in (t.proveedor, t.descripcion) if x)
-                tickets.append(TicketRef(tid, t.period, t.total, text, t.subcategoria))
+                tickets.append(TicketRef(tid, t.period, t.total, text, t.subcategoria, m.period, privado=t.privado))
                 lookup["tickets"][tid] = (m, t)
     return lines, tickets, lookup
 
@@ -330,26 +421,21 @@ def movement_text(descripcion: str) -> str:
 
 
 def collect_movements(manifests) -> tuple[list[TicketRef], dict]:
-    """Bank debits of all published receipts documents as match candidates, plus id -> (manifest, movement)."""
+    """Payment evidence of all published receipts documents as match candidates (bank debits
+    and cheques not cleared yet, payments.py), plus id -> payments.Payment."""
     from .classify import classify_text
-    from .config import PHASE_KINDS
-    from .extract import load_extract
-    from .ids import movement_ids
-    from .schemas import Comprobantes
+    from .payments import collect_payments
 
     refs: list[TicketRef] = []
     lookup: dict = {}
-    for m in manifests:
-        if m.kind not in PHASE_KINDS:
-            continue
-        ext = load_extract(m)
-        if not isinstance(ext, Comprobantes):
-            continue
-        for st in ext.bank:
-            for mid, mv in zip(movement_ids(m.work_dir_name, st.movements), st.movements, strict=True):
-                text = movement_text(mv.descripcion)
-                refs.append(TicketRef(mid, mv.period, mv.importe, text, classify_text(text)[0]))
-                lookup[mid] = (m, mv)
+    for p in collect_payments(manifests):
+        text = movement_text(p.mv.descripcion)
+        if p.cheque and p.cheque.beneficiario and p.cheque.beneficiario not in text:
+            text = f"{text} {p.cheque.beneficiario}"  # who it paid: helps tell the line
+        is_cheque = p.cheque is not None or p.mv.kind == "cheque" or "CHEQUE" in p.mv.descripcion.upper()
+        refs.append(TicketRef(p.id, p.mv.period, p.mv.importe, text, classify_text(text)[0],
+                              months_after=CHEQUE_MONTHS_AFTER if is_cheque else 0))  # fmt: skip
+        lookup[p.id] = p
     return refs, lookup
 
 

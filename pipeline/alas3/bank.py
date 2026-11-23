@@ -42,7 +42,8 @@ _ROW = re.compile(
     rf"^(?P<fecha>{_DATE})\s+(?:(?P<comprobante>\d+)\s+)?(?P<codigo>[A-Z]?\d{{2,3}})\s+"
     rf"(?P<desc>\S.*?)\s+(?P<importe>{_AMOUNT})\s*$"
 )
-_OPENING_ROW = re.compile(rf"^(?P<fecha>{_DATE})\s+SALDO AL INICIO\s+(?P<importe>{_AMOUNT})\s*$")
+# "SALDO AL INICIO" or "Saldo Al Inicio" (the bank changed it in 2025).
+_OPENING_ROW = re.compile(rf"^(?P<fecha>{_DATE})\s+SALDO AL INICIO\s+(?P<importe>{_AMOUNT})\s*$", re.I)
 # Any line that starts with a date and ends with an amount: used to fail closed (see row_kinds).
 _ANY_ROW = re.compile(rf"^{_DATE}\s.*?(?P<importe>{_AMOUNT})\s*$")
 _SALDO_AL = re.compile(rf"^Saldo al (?P<fecha>{_DATE})\s+(?P<importe>{_AMOUNT})\s*$")
@@ -50,7 +51,7 @@ _HASTA = re.compile(rf"Per[ií]odo Hasta\s*:\s*(?P<fecha>{_DATE})\s+Saldo\s*:\s*
 _DESDE = re.compile(rf"Per[ií]odo Desde\s*:\s*(?P<fecha>{_DATE})")
 _CUENTA = re.compile(r"Cuenta\s*:\s*(\S+)")
 _BANCO = re.compile(r"^(Banco [^:]+?)\s+Cuit", re.M)
-_OPENING = re.compile(r"\bSALDO AL INICIO\b")
+_OPENING = re.compile(r"\bSALDO AL INICIO\b", re.I)
 # Debits that name a person: published without the name.
 _SALARY = re.compile(r"\bHABER(ES)?\b|\bSUELDO|\bSAC\b|AGUINALDO", re.I)
 _REFUND = re.compile(r"DEVOLUC|REINTEGR|REEMBOLS", re.I)
@@ -151,8 +152,12 @@ def _public_desc(desc: str) -> str:
     return redact_text(desc) or ""
 
 
-def parse(pages: list[tuple[int, str]]) -> BankStatement:
-    """pages: [(page_no, full private text)] of ONE statement, in order."""
+def parse(pages: list[tuple[int, str]], closing: float | None = None) -> BankStatement:
+    """pages: [(page_no, full private text)] of ONE statement, in order.
+
+    `closing`: a reviewed correction of a misprinted closing balance (transcription
+    `bank_closing`). Used only when it equals opening + movements and the statement has
+    "Saldo al" checkpoints, all of them matching: the header alone is what was wrong."""
     if not pages:
         raise StatementError("no pages")
     head = "\n".join(t for _, t in pages)
@@ -201,7 +206,9 @@ def parse(pages: list[tuple[int, str]]) -> BankStatement:
         if n == len(raw) and abs(running - bal) > CENT:
             raise StatementError(f"balance {running:.2f} != 'Saldo al' {bal:.2f} at the end")
     if abs(running - saldo_final) > CENT:
-        raise StatementError(f"opening + movements = {running:.2f}, closing balance says {saldo_final:.2f}")
+        if closing is None or abs(closing - running) > CENT or not checkpoints:
+            raise StatementError(f"opening + movements = {running:.2f}, closing balance says {saldo_final:.2f}")
+        saldo_final = closing
 
     hasta = iso(hasta_m["fecha"])
     movements: list[BankMovement] = []
@@ -248,11 +255,12 @@ def private_text_path(m: DocumentManifest, page_no: int):
     return doc_dir(m) / "raw" / f"p{page_no:03d}.bank.txt"
 
 
-def statements(m: DocumentManifest) -> tuple[list[BankStatement], list[int]]:
+def statements(m: DocumentManifest, closings: dict[int, float] | None = None) -> tuple[list[BankStatement], list[int]]:
     """Statements in a document, and the statement pages that could not be verified.
 
     Consecutive statement pages form one statement; a new account number or a new
-    opening balance starts another. Restricted pages are never read. The text comes
+    opening balance starts another. Restricted pages are never read. `closings`: first page
+    of a statement -> its corrected closing balance (see parse). The text comes
     from the private copy ingest keeps (credit rows are blacked out on the public page).
     """
     groups: list[list[tuple[int, str]]] = []
@@ -280,7 +288,7 @@ def statements(m: DocumentManifest) -> tuple[list[BankStatement], list[int]]:
     out: list[BankStatement] = []
     for g in groups:
         try:
-            out.append(parse(g))
+            out.append(parse(g, (closings or {}).get(g[0][0])))
         except StatementError as e:
             print(f"  ! {m.source_name} pages {g[0][0]}-{g[-1][0]}: bank statement not verified: {e}")
             failed += [n for n, _ in g]
