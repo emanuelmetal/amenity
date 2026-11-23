@@ -327,6 +327,21 @@ describe("POST /api/ask", () => {
     expect(calls).toHaveLength(0);
   });
 
+  it("is off when ASK_DB points at the main database (misconfigured wrangler.toml)", async () => {
+    env.ASK_DB = env.DB;
+    const cookie = await login();
+    expect((await askQ(cookie, "x")).status).toBe(503);
+    expect(((await (await call("/api/ask", { cookie })).json()) as any).available).toBe(false);
+    expect(calls).toHaveLength(0);
+  });
+
+  it("is off when the ask database holds any table besides the ask_* copies", async () => {
+    askRaw.exec("CREATE TABLE notas (x TEXT)");
+    const cookie = await login();
+    expect((await askQ(cookie, "x")).status).toBe(503);
+    expect(calls).toHaveLength(0);
+  });
+
   it("is unavailable without the AI binding", async () => {
     delete env.AI;
     const cookie = await login();

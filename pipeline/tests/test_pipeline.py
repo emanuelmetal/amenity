@@ -210,7 +210,7 @@ def test_publish_reuploads_changed_files_and_deletes_restricted_renders(data_dir
     [m] = ingest.ingest_all(force=True)
     calls.clear()
     publish.publish(local=True)
-    assert calls == [("put", publish.pdf_key(m)), ("d1", ""), ("ask", ""), ("delete", publish.page_key(m, 2))]
+    assert calls == [("put", publish.pdf_key(m)), ("d1", ""), ("delete", publish.page_key(m, 2)), ("ask", "")]
 
 
 def test_period_and_kind_from_real_file_names():

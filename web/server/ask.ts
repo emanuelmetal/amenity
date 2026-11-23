@@ -413,17 +413,47 @@ async function userKey(c: C): Promise<string> {
   return keyedHash(c.env.SESSION_SECRET, "ask-v1", s.kind === "shared" ? `device:${s.deviceId}` : `code:${s.codeId}`);
 }
 
+/** Objects allowed in ASK_DB besides the ask_* copies: D1's migration log and SQLite/D1 internals. */
+const ASK_DB_INTERNAL = /^(d1_migrations|sqlite_.*|_cf_.*)$/;
+const isolationChecked = new WeakMap<object, Promise<boolean>>();
+
+/** True only when ASK_DB holds nothing but the ask_* tables (and their indexes). Guards against
+ *  a wrangler.toml that points ASK_DB at the main database: then the feature is off. Cached per
+ *  binding object (one query per isolate). */
+export function askDbIsolated(askDb: NonNullable<Env["ASK_DB"]>): Promise<boolean> {
+  let p = isolationChecked.get(askDb);
+  if (!p) {
+    p = askDb
+      .prepare("SELECT tbl_name FROM sqlite_master")
+      .all<{ tbl_name: string }>()
+      .then(({ results }) => results.every((r) => r.tbl_name in VIEWS || ASK_DB_INTERNAL.test(r.tbl_name)))
+      .catch(() => false);
+    p.then((ok) => {
+      if (!ok) {
+        isolationChecked.delete(askDb); // re-check next time (a transient error must not stick)
+        console.error("ask: ASK_DB is not the isolated torre3_ask database; feature off");
+      }
+    });
+    isolationChecked.set(askDb, p);
+  }
+  return p;
+}
+
+async function usable(env: Env): Promise<boolean> {
+  return Boolean(env.AI && env.ASK_DB && (await askDbIsolated(env.ASK_DB)));
+}
+
 ask.get("/", async (c) => {
   const row = await c.env.DB.prepare("SELECT n FROM ask_usage WHERE day = ?1 AND key = ?2")
     .bind(today(), await userKey(c))
     .first<{ n: number }>();
-  return c.json({ available: Boolean(c.env.AI && c.env.ASK_DB), limit: DAILY_PER_USER, remaining: Math.max(0, DAILY_PER_USER - (row?.n ?? 0)) });
+  return c.json({ available: await usable(c.env), limit: DAILY_PER_USER, remaining: Math.max(0, DAILY_PER_USER - (row?.n ?? 0)) });
 });
 
 ask.post("/", async (c) => {
   const ai = c.env.AI;
   const askDb = c.env.ASK_DB;
-  if (!ai || !askDb) return c.json({ error: "unavailable" }, 503);
+  if (!ai || !askDb || !(await usable(c.env))) return c.json({ error: "unavailable" }, 503);
   let question: unknown;
   try {
     question = ((await c.req.json()) as { pregunta?: unknown }).pregunta;
