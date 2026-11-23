@@ -1,5 +1,6 @@
 /** Read-only JSON API (Phase 1). Every route runs behind `gate()` in worker.ts. */
 import { Hono } from "hono";
+import { ask } from "./ask";
 import { comments } from "./comments";
 import type { Env, SessionData } from "./env";
 
@@ -36,7 +37,7 @@ const LACKS_RECEIPT = (e: string) => `(NOT ${HAS_RECEIPT(e)} AND ${RECEIPTS_FOR(
 const LACKS_PAYMENT = (e: string) => `(NOT ${HAS_PAYMENT(e)} AND ${STATEMENT_FOR(e)})`;
 /** A line is backed when it has a receipt AND a bank payment, each one required only when that
  *  kind of evidence was uploaded for its month; and at least one of them. `e` = expense_lines alias. */
-const BACKED = (e: string) =>
+export const BACKED = (e: string) =>
   `((${HAS_RECEIPT(e)} OR ${HAS_PAYMENT(e)}) AND NOT ${LACKS_RECEIPT(e)} AND NOT ${LACKS_PAYMENT(e)})`;
 /** Periods with uploaded evidence (receipts or a bank statement): only there "sin comprobante" means something. */
 const EVIDENCE_PERIODS = `${RECEIPT_PERIODS} UNION ${PAYMENT_PERIODS}`;
@@ -608,5 +609,6 @@ async function orderedPublicPages(env: Env, json: string) {
 }
 
 api.route("/", comments);
+api.route("/ask", ask);
 
 api.all("*", (c) => c.json({ error: "not_found" }, 404));

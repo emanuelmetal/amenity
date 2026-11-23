@@ -426,6 +426,9 @@ def publish(local: bool) -> None:
         build_sql(manifests, sync_cheque_decisions(collect_movements(manifests)[1]), load_observations())
     )
     wrangler.d1_file(sql_path, local)
+    from .ask_sync import sync
+
+    sync(local)  # "Preguntale al portal" reads only this copy of the ask_* views
 
     # 3. everything uploaded before that is no longer published (restricted pages, dropped documents)
     to_delete = sorted(k for k in state if k not in expected)

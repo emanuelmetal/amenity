@@ -14,6 +14,7 @@ import Gastos from "./pages/Gastos";
 import Inicio from "./pages/Inicio";
 import Observaciones from "./pages/Observaciones";
 import Pagina from "./pages/Pagina";
+import Preguntar from "./pages/Preguntar";
 import Reglamento from "./pages/Reglamento";
 import "./styles.css";
 
@@ -36,6 +37,7 @@ const router = createBrowserRouter([
       { path: "/actas/:id", element: <Actas /> },
       { path: "/comentarios", element: <Comentarios /> },
       { path: "/buscar", element: <Buscar /> },
+      { path: "/preguntar", element: <Preguntar /> },
       { path: "/paginas/:id", element: <Pagina /> },
       { path: "/como-funciona", element: <ComoFunciona /> },
       { path: "*", element: <Empty>Página no encontrada.</Empty> },

@@ -1,4 +1,4 @@
-import { BookOpen, Building2, ChartColumn, ClipboardCheck, FileText, HelpCircle, LayoutDashboard, Menu, MessageSquare, NotebookPen, Receipt, Search } from "lucide-react";
+import { BookOpen, Building2, ChartColumn, ClipboardCheck, FileText, HelpCircle, LayoutDashboard, Menu, MessageSquare, NotebookPen, Receipt, Search, Sparkles } from "lucide-react";
 import { useState, type FormEvent, type ReactNode } from "react";
 import { NavLink, Outlet, useNavigate } from "react-router";
 import { formatDate } from "../lib/format";
@@ -10,6 +10,7 @@ const NAV: { section: string; items: { to: string; label: string; icon: ReactNod
     items: [
       { to: "/", label: "Inicio", icon: <LayoutDashboard size={18} />, end: true },
       { to: "/buscar", label: "Buscar", icon: <Search size={18} /> },
+      { to: "/preguntar", label: "Preguntar", icon: <Sparkles size={18} /> },
       { to: "/comentarios", label: "Comentarios", icon: <MessageSquare size={18} /> },
     ],
   },

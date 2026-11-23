@@ -19,12 +19,12 @@ def target_flag(local: bool) -> str:
     return "--local" if local else "--remote"
 
 
-def d1_file(path: Path, local: bool) -> None:
-    _run(["d1", "execute", DB_NAME, target_flag(local), "--yes", "--file", str(path)])
+def d1_file(path: Path, local: bool, db: str = DB_NAME) -> None:
+    _run(["d1", "execute", db, target_flag(local), "--yes", "--file", str(path)])
 
 
-def d1_command(sql: str, local: bool) -> str:
-    return _run(["d1", "execute", DB_NAME, target_flag(local), "--yes", "--json", "--command", sql])
+def d1_command(sql: str, local: bool, db: str = DB_NAME) -> str:
+    return _run(["d1", "execute", db, target_flag(local), "--yes", "--json", "--command", sql])
 
 
 def r2_put(key: str, file: Path, content_type: str, local: bool) -> None:

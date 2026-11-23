@@ -31,7 +31,9 @@ export async function send<T>(method: "POST" | "DELETE", path: string, body?: un
   if (!res.ok) {
     const err = new ApiError(res.status);
     try {
-      (err as ApiError & { code?: string }).code = ((await res.json()) as { error?: string }).error;
+      const data = (await res.json()) as { error?: string } & Record<string, unknown>;
+      (err as ApiError & { code?: string; data?: Record<string, unknown> }).code = data.error;
+      (err as ApiError & { data?: Record<string, unknown> }).data = data;
     } catch {
       /* not JSON */
     }
@@ -266,4 +268,17 @@ export interface Comment {
   moderated?: number;
   label?: string | null; // recent feed: what it is about
   history?: { action: "hide" | "restore"; moderator: number; at: string }[];
+}
+
+export interface AskStatus {
+  available: boolean;
+  limit: number;
+  remaining: number;
+}
+export interface AskAnswer {
+  titulo: string;
+  sql: string;
+  columns: string[];
+  rows: (string | number | null)[][];
+  truncated: boolean;
 }

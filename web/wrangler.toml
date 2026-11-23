@@ -18,9 +18,24 @@ database_name = "torre3"
 database_id = "00000000-0000-0000-0000-000000000000"
 migrations_dir = "../db/migrations"
 
+# "Preguntale al portal" runs LLM-written SQL ONLY here: copies of the ask_* views, written by
+# publish (pipeline/alas3/ask_sync.py). Nothing private may ever be stored in this database.
+[[d1_databases]]
+binding = "ASK_DB"
+database_name = "torre3_ask"
+# Replace with the id printed by `npx wrangler d1 create torre3_ask` before deploying.
+database_id = "00000000-0000-0000-0000-000000000001"
+migrations_dir = "../db/ask_migrations"
+
 [[r2_buckets]]
 binding = "FILES"
 bucket_name = "torre3-files"
 
 # SESSION_SECRET: set with `npx wrangler secret put SESSION_SECRET` (prod)
 # and in web/.dev.vars for local dev (see .dev.vars.example).
+
+# Workers AI for "Preguntale al portal" (server/ask.ts). `wrangler dev` always calls the
+# remote service (needs `wrangler login`; uses the account's free daily allocation).
+# Override the model with [vars] ASK_MODEL = "@cf/...".
+[ai]
+binding = "AI"

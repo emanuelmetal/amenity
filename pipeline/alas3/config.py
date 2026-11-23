@@ -12,6 +12,7 @@ WORK = DATA / "work"
 OUT = DATA / "out"
 WEB = REPO / "web"
 DB_NAME = "torre3"
+ASK_DB_NAME = "torre3_ask"  # "Preguntale al portal": only copies of the ask_* views (ask_sync.py)
 BUCKET = "torre3-files"
 
 KINDS = ("liquidaciones", "comprobantes", "reglamento", "actas", "otro")

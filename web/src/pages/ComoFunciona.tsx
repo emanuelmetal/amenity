@@ -53,6 +53,20 @@ export default function ComoFunciona() {
             <li>Ser anónimo en el sitio no quita la responsabilidad legal de cada persona por lo que escribe.</li>
           </ul>
         </Card>
+        <Card title="Preguntale al portal">
+          <ul className="list-disc space-y-1 pl-5">
+            <li>
+              Tu pregunta se envía a un modelo de inteligencia artificial de Cloudflare (Workers AI), que la traduce a una consulta sobre
+              los datos que ya se ven en el portal. El modelo no ve los datos: solo la pregunta y la lista de columnas disponibles.
+            </li>
+            <li>
+              La consulta solo puede leer gastos, comprobantes, pagos, observaciones, actas y reglamento; nunca comentarios ni datos de
+              acceso. Siempre se muestra la consulta usada, para que puedas revisarla.
+            </li>
+            <li>El portal no guarda tus preguntas; solo cuenta cuántas se hicieron en el día: hasta 20 por dispositivo con el enlace compartido, o por enlace si es un enlace por departamento.</li>
+            <li>No escribas datos personales en la pregunta. La respuesta puede tener errores: confirmá los números en Gastos o Análisis.</li>
+          </ul>
+        </Card>
         <Card title="Privacidad">
           <ul className="list-disc space-y-1 pl-5">
             <li>El sitio no aparece en buscadores y los archivos solo se descargan con una sesión válida.</li>

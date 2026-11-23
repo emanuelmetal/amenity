@@ -5,6 +5,7 @@ import { join } from "node:path";
 import type { Env } from "../server/env";
 
 const MIGRATIONS = join(import.meta.dirname, "../../db/migrations");
+const ASK_MIGRATIONS = join(import.meta.dirname, "../../db/ask_migrations");
 
 class Stmt {
   private args: unknown[] = [];
@@ -35,10 +36,10 @@ class Stmt {
   }
 }
 
-export function fakeD1(): { d1: Env["DB"]; raw: Database.Database } {
+export function fakeD1(dir = MIGRATIONS): { d1: Env["DB"]; raw: Database.Database } {
   const raw = new Database(":memory:");
-  for (const f of readdirSync(MIGRATIONS).filter((f) => f.endsWith(".sql")).sort()) {
-    raw.exec(readFileSync(join(MIGRATIONS, f), "utf8"));
+  for (const f of readdirSync(dir).filter((f) => f.endsWith(".sql")).sort()) {
+    raw.exec(readFileSync(join(dir, f), "utf8"));
   }
   const d1 = {
     prepare: (sql: string) => new Stmt(raw, sql),
@@ -54,4 +55,23 @@ export function fakeR2(objects: Record<string, string>): Env["FILES"] {
         ? { body: new Response(objects[key]).body }
         : null,
   } as unknown as Env["FILES"];
+}
+
+/** The torre3_ask database, filled like pipeline/alas3/ask_sync.py does: every ask_* view of
+ *  the main database (but ask_gastos_base) copied into the table of the same name. */
+export function fakeAskD1(main: Database.Database): { d1: Env["DB"]; raw: Database.Database } {
+  const ask = fakeD1(ASK_MIGRATIONS);
+  syncAsk(main, ask.raw);
+  return ask;
+}
+
+export function syncAsk(main: Database.Database, ask: Database.Database): void {
+  const views = (main.prepare("SELECT name FROM sqlite_master WHERE type = 'view' AND name LIKE 'ask%' AND name != 'ask_gastos_base'").all() as { name: string }[]).map((r) => r.name);
+  for (const v of views) {
+    const cols = (ask.prepare(`SELECT name FROM pragma_table_info('${v}')`).all() as { name: string }[]).map((r) => r.name);
+    if (!cols.length) throw new Error(`${v}: no table in the ask database`);
+    ask.exec(`DELETE FROM ${v}`);
+    const ins = ask.prepare(`INSERT INTO ${v} (${cols.join(", ")}) VALUES (${cols.map((c) => `@${c}`).join(", ")})`);
+    for (const row of main.prepare(`SELECT * FROM ${v}`).all() as Record<string, unknown>[]) ins.run(row);
+  }
 }

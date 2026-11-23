@@ -51,8 +51,13 @@ async function hmac(key: ArrayBuffer, msg: string): Promise<ArrayBuffer> {
 /** HMAC(HMAC(SESSION_SECRET, label), device_id): not reversible to the device id, and only
  *  comparable by whoever holds SESSION_SECRET. */
 export async function authorKey(secret: string, deviceId: string): Promise<string> {
-  const derived = await hmac(new TextEncoder().encode(secret).buffer as ArrayBuffer, "comment-author-v1");
-  const mac = await hmac(derived, deviceId);
+  return keyedHash(secret, "comment-author-v1", deviceId);
+}
+
+/** HMAC(HMAC(secret, label), value) as hex: one derived key per purpose (comments, ask limits). */
+export async function keyedHash(secret: string, label: string, value: string): Promise<string> {
+  const derived = await hmac(new TextEncoder().encode(secret).buffer as ArrayBuffer, label);
+  const mac = await hmac(derived, value);
   return [...new Uint8Array(mac)].map((b) => b.toString(16).padStart(2, "0")).join("");
 }
 
