@@ -1,5 +1,5 @@
-import { X } from "lucide-react";
-import { useEffect, type ButtonHTMLAttributes, type InputHTMLAttributes, type ReactNode, type SelectHTMLAttributes } from "react";
+import { Check, ChevronDown, X } from "lucide-react";
+import { useEffect, useId, useRef, useState, type ButtonHTMLAttributes, type InputHTMLAttributes, type ReactNode, type SelectHTMLAttributes } from "react";
 
 const cx = (...c: (string | false | null | undefined)[]) => c.filter(Boolean).join(" ");
 
@@ -44,19 +44,20 @@ export function KpiTile({ icon, label, value, footer }: { icon: ReactNode; label
   );
 }
 
-type Status = "verificado" | "sin-verificar" | "sin-comprobante" | "auto";
+type Status = "verificado" | "sin-verificar" | "sin-comprobante" | "auto" | "posible";
 const STATUS: Record<Status, { label: string; dot: string }> = {
   verificado: { label: "Verificado", dot: "bg-success" },
   "sin-verificar": { label: "Sin verificar", dot: "bg-warning" },
   "sin-comprobante": { label: "Sin comprobante", dot: "bg-error" },
   auto: { label: "Vinculado automáticamente", dot: "bg-info" },
+  posible: { label: "Posible coincidencia", dot: "bg-warning" },
 };
-export function StatusTag({ status }: { status: Status }) {
+export function StatusTag({ status, label }: { status: Status; label?: string }) {
   const s = STATUS[status];
   return (
     <span className="inline-flex items-center gap-1.5 whitespace-nowrap rounded-md border border-gray-200 bg-white px-2 py-0.5 text-xs font-semibold text-gray-900">
       <span className={cx("size-1.5 rounded-full", s.dot)} />
-      {s.label}
+      {label ?? s.label}
     </span>
   );
 }
@@ -151,4 +152,96 @@ export function Snippet({ text }: { text: string }) {
   }
   parts.push(text.slice(last));
   return <>{parts}</>;
+}
+
+export interface MultiOption {
+  value: string;
+  label: string;
+  group?: string;
+}
+
+/** Dropdown with checkboxes. An empty selection means "all". */
+export function MultiSelect({ label, allLabel, plural, options, value, onChange, className }: {
+  label: string;
+  allLabel: string;
+  plural: string; // noun for the summary, e.g. "períodos" -> "3 períodos"
+  options: MultiOption[];
+  value: string[];
+  onChange: (v: string[]) => void;
+  className?: string;
+}) {
+  const [open, setOpen] = useState(false);
+  const ref = useRef<HTMLDivElement>(null);
+  const id = useId();
+  useEffect(() => {
+    if (!open) return;
+    const onDown = (e: MouseEvent) => ref.current && !ref.current.contains(e.target as Node) && setOpen(false);
+    const onKey = (e: KeyboardEvent) => e.key === "Escape" && setOpen(false);
+    document.addEventListener("mousedown", onDown);
+    window.addEventListener("keydown", onKey);
+    return () => {
+      document.removeEventListener("mousedown", onDown);
+      window.removeEventListener("keydown", onKey);
+    };
+  }, [open]);
+
+  const selected = new Set(value);
+  const toggle = (v: string) => onChange(selected.has(v) ? value.filter((x) => x !== v) : [...value, v]);
+  const summary =
+    value.length === 0
+      ? allLabel
+      : value.length === 1
+        ? (options.find((o) => o.value === value[0])?.label ?? value[0])
+        : `${value.length} ${plural}`;
+
+  let lastGroup: string | undefined;
+  return (
+    <div ref={ref} className={cx("relative", className)}>
+      <button
+        type="button"
+        aria-label={label}
+        aria-haspopup="listbox"
+        aria-expanded={open}
+        aria-controls={id}
+        onClick={() => setOpen((o) => !o)}
+        className={cx(fieldClass, "inline-flex w-full items-center justify-between gap-2 text-left", value.length > 0 && "border-primary")}
+      >
+        <span className="truncate">{summary}</span>
+        <ChevronDown size={14} className="shrink-0 text-gray-400" />
+      </button>
+      {open && (
+        <div
+          id={id}
+          role="listbox"
+          aria-multiselectable="true"
+          className="absolute left-0 z-30 mt-1 max-h-80 w-64 md:left-auto md:right-0 overflow-y-auto rounded-lg border border-gray-200 bg-white py-1 shadow-lg"
+        >
+          <button
+            type="button"
+            className="flex w-full items-center justify-between px-3 py-2 text-left text-sm hover:bg-gray-50 disabled:text-gray-400"
+            disabled={value.length === 0}
+            onClick={() => onChange([])}
+          >
+            {allLabel}
+            {value.length === 0 && <Check size={14} className="text-primary" />}
+          </button>
+          <div className="my-1 border-t border-gray-200" />
+          {options.map((o) => {
+            const header = o.group && o.group !== lastGroup ? o.group : null;
+            lastGroup = o.group;
+            const on = selected.has(o.value);
+            return (
+              <div key={o.value}>
+                {header && <div className="px-3 pb-1 pt-2 text-xs font-semibold uppercase tracking-wider text-gray-400">{header}</div>}
+                <label role="option" aria-selected={on} className="flex cursor-pointer items-center gap-2 px-3 py-1.5 text-sm text-gray-900 hover:bg-gray-50">
+                  <input type="checkbox" checked={on} onChange={() => toggle(o.value)} className="size-4 accent-[var(--color-primary)]" />
+                  <span className="truncate">{o.label}</span>
+                </label>
+              </div>
+            );
+          })}
+        </div>
+      )}
+    </div>
+  );
 }

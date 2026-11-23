@@ -17,7 +17,7 @@ from pydantic import BaseModel
 from . import liquidacion
 from .config import WORK
 from .ingest import doc_dir, raw_text
-from .schemas import DocumentManifest, Liquidacion, Reglamento, ReglamentoArticle
+from .schemas import Comprobantes, DocumentManifest, Liquidacion, Reglamento, ReglamentoArticle
 
 MANUAL_DIR = WORK / "extract"
 
@@ -118,8 +118,12 @@ def extract_document(m: DocumentManifest) -> BaseModel | None:
             if not m.period:
                 raise ValueError(f"{m.source_name}: cannot infer period (name files YYYY-MM_*.pdf)")
             result = liquidacion.parse(m.period, pages)
+    elif m.kind == "comprobantes":
+        from . import receipts
+
+        result = receipts.build(m)
     else:
-        return None  # comprobantes / actas: Phase 2–3
+        return None  # actas: Phase 3
     out: Path = doc_dir(m) / "extract.json"
     out.write_text(result.model_dump_json(indent=2))
     return result
@@ -129,5 +133,5 @@ def load_extract(m: DocumentManifest) -> dict | None:
     p = doc_dir(m) / "extract.json"
     if not p.exists():
         return None
-    model = {"reglamento": Reglamento, "liquidacion": Liquidacion}.get(m.kind)
+    model = {"reglamento": Reglamento, "liquidacion": Liquidacion, "comprobantes": Comprobantes}.get(m.kind)
     return model.model_validate_json(p.read_text()) if model else None  # type: ignore[return-value]

@@ -35,12 +35,28 @@ _CUIT_LABELED = re.compile(
 )
 # DNI after a label (dotted, spaced or plain), or in dotted form NN.NNN.NNN.
 _DNI_LABELED = re.compile(
-    r"(?i)\b(D\.?\s?N\.?\s?I\.?|D\.?\s?U\.?|M\.?\s?I\.?|documento(?:\s+nacional\s+de\s+identidad)?|doc\.|L\.?\s?E\.?|L\.?\s?C\.?)"
+    # A CUIT/CUIL label followed by only 7-8 digits is a DNI ("C.U.I.T.: 16408564").
+    r"(?i)\b(D\.?\s?N\.?\s?[Il1|]\.?|D\.?\s?U\.?|M\.?\s?I\.?|documento(?:\s+nacional\s+de\s+identidad)?|doc\.|L\.?\s?E\.?|L\.?\s?C\.?"
+    r"|C\.?\s?U\.?\s?I\.?\s?[TL]\.?)"
     r"(\s*(?:n[°ºo.]*\s*:?|nro\.?\s*:?|:)?\s*)(\d{1,2}[. ]?\d{3}[. ]?\d{3})\b"
 )
+# Insurers write a DNI as "D" + zero padding: "D0000012345678".
+_DNI_PADDED = re.compile(r"\bD0{2,}(\d{7,8})\b")
 _DNI_DOTTED = re.compile(r"(?<![\d.,$])(?<!\$ )\d{1,2}\.\d{3}\.\d{3}(?![\d.,])")
+# A long digit run that starts with a person CUIT: the human-readable line under the
+# barcode of older AFIP invoices (CUIT + type + point of sale + CAE + due date).
+_CUIT_PREFIXED_RUN = re.compile(r"(?<!\d)2[0347]\d{18,}(?!\d)")
 
 PERSON_CUIT_PREFIXES = {"20", "23", "24", "27"}
+
+# Documents about one person (an insurance policy lists the insured, their DNI and home).
+PERSONAL_PATTERNS = [
+    re.compile(p, re.I)
+    for p in (
+        r"asegurado\s*/\s*domicilio",
+        r"accidentes\s+personales.*\n(?:.*\n){0,40}?.*asegurado",
+    )
+]
 
 PAYROLL_PATTERNS = [
     re.compile(p, re.I)
@@ -51,6 +67,12 @@ PAYROLL_PATTERNS = [
         r"sueldo\s+b[aá]sico",
         r"aportes\s+jubilatorios",
         r"\bSUTERH\b.*\bhaberes\b",
+        # Any salary slip, also a vacation month without "sueldo básico".
+        r"neto\s+a\s+cobr",
+        r"firma\s+(?:del\s+)?empleado",
+        r"composici[oó]n\s+salarial",
+        r"sueldo\s+neto",
+        r"costo\s+total\s+empleador",
     )
 ]
 
@@ -78,6 +100,21 @@ class PagePolicy:
     open_block: bool = False  # a debt block was still open at the end of the page
 
 
+def valid_cuit(digits: str) -> bool:
+    """CUIT/CUIL check digit (mod 11)."""
+    if len(digits) != 11 or not digits.isdigit():
+        return False
+    total = sum(int(d) * w for d, w in zip(digits[:10], (5, 4, 3, 2, 7, 6, 5, 4, 3, 2), strict=True))
+    check = 11 - total % 11
+    check = {11: 0, 10: 9}.get(check, check)
+    return check == int(digits[10])
+
+
+def _cuit_runs(text: str) -> list[str]:
+    # Only when the first 11 digits are a valid CUIT: utility payment barcodes also start with 2x.
+    return [m.group(0) for m in _CUIT_PREFIXED_RUN.finditer(text) if valid_cuit(m.group(0)[:11])]
+
+
 def _mask_cuit(m: re.Match[str]) -> str:
     return MASK if m.group(1) in PERSON_CUIT_PREFIXES else m.group(0)
 
@@ -93,9 +130,11 @@ def redact_text(text: str | None) -> str | None:
         ),
         text,
     )
+    text = _CUIT_PREFIXED_RUN.sub(lambda m: MASK if valid_cuit(m.group(0)[:11]) else m.group(0), text)
     text = _CBU.sub(MASK, text)
     text = _CUIT.sub(_mask_cuit, text)
     text = _DNI_LABELED.sub(lambda m: f"{m.group(1)}{m.group(2)}{MASK}", text)
+    text = _DNI_PADDED.sub(MASK, text)
     # Dotted 7–8 digit numbers look like DNIs; amounts carry decimals/$ and are excluded by the lookarounds.
     text = _DNI_DOTTED.sub(MASK, text)
     return text
@@ -108,9 +147,11 @@ def sensitive_strings(text: str) -> list[str]:
         for m in _CUIT_LABELED.finditer(text)
         if m.group(2).upper() == "L" or m.group(4)[:2] in PERSON_CUIT_PREFIXES
     ]
+    found += _cuit_runs(text)
     found += [m.group(0) for m in _CBU.finditer(text)]
     found += [m.group(0) for m in _CUIT.finditer(text) if m.group(1) in PERSON_CUIT_PREFIXES]
     found += [m.group(3) for m in _DNI_LABELED.finditer(text)]
+    found += [m.group(0) for m in _DNI_PADDED.finditer(text)]
     found += [m.group(0) for m in _DNI_DOTTED.finditer(text)]
     return sorted(set(found), key=len, reverse=True)
 
@@ -132,6 +173,8 @@ def page_policy(rows: str | list[str], *, scanned: bool = False, carry_in: bool 
         return PagePolicy(restricted="no_text" if scanned else None)
     if any(p.search(text) for p in PAYROLL_PATTERNS):
         return PagePolicy(restricted="payroll")
+    if any(p.search(text) for p in PERSONAL_PATTERNS):
+        return PagePolicy(restricted="personal")
 
     hidden: set[int] = set()
     in_block = carry_in

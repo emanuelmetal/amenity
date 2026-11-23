@@ -1,0 +1,949 @@
+<!doctype html>
+<html lang="es-AR">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Revisión · Torre 3</title>
+<link rel="icon" href="data:,">
+<style>
+  :root { --bg:#f7f7f8; --panel:#fff; --line:#e5e7eb; --text:#111827; --muted:#6b7280; --primary:#286cf0;
+          --ok:#16a34a; --bad:#dc2626; --warn:#d97706; }
+  * { box-sizing: border-box; }
+  body { margin:0; font:14px/1.45 system-ui, -apple-system, "Segoe UI", sans-serif; background:var(--bg); color:var(--text); }
+  header { position:sticky; top:0; z-index:5; background:var(--panel); border-bottom:1px solid var(--line); padding:12px 20px; display:flex; gap:16px; align-items:center; flex-wrap:wrap; }
+  header h1 { font-size:16px; margin:0 12px 0 0; }
+  nav button { border:1px solid var(--line); background:#fff; border-radius:8px; padding:6px 10px; cursor:pointer; font:inherit; }
+  nav button[aria-pressed=true] { border-color:var(--primary); color:var(--primary); font-weight:600; }
+  .hint { color:var(--muted); font-size:12px; margin-left:auto; }
+  main { max-width:1200px; margin:0 auto; padding:20px; display:grid; gap:14px; }
+  .card { background:var(--panel); border:1px solid var(--line); border-radius:12px; padding:14px; display:grid; gap:10px; }
+  .row { display:flex; gap:12px; align-items:flex-start; flex-wrap:wrap; }
+  .line { flex:1 1 320px; }
+  .amount { font-variant-numeric:tabular-nums; font-weight:600; white-space:nowrap; }
+  .muted { color:var(--muted); font-size:12px; }
+  .tickets { display:grid; gap:8px; grid-template-columns:repeat(auto-fill, minmax(260px, 1fr)); }
+  .ticket { border:1px solid var(--line); border-radius:10px; padding:8px; display:grid; gap:6px; }
+  .ticket.verified { border-color:var(--ok); } .ticket.rejected { border-color:var(--bad); opacity:.6; }
+  .thumbs { display:flex; gap:4px; overflow-x:auto; }
+  .thumbs img { height:120px; border:1px solid var(--line); border-radius:6px; cursor:zoom-in; background:#fafafa; }
+  .tag { display:inline-block; border-radius:999px; padding:1px 8px; font-size:12px; border:1px solid var(--line); }
+  .tag.pending { color:var(--warn); border-color:var(--warn); } .tag.auto { color:var(--primary); border-color:var(--primary); }
+  .tag.verified { color:var(--ok); border-color:var(--ok); } .tag.bank { color:var(--muted, #555); }
+  .tag[hidden] { display:none; }
+  button.act { border:1px solid var(--line); background:#fff; border-radius:8px; padding:5px 10px; cursor:pointer; font:inherit; }
+  button.ok { border-color:var(--ok); color:var(--ok); } button.bad { border-color:var(--bad); color:var(--bad); }
+  button.ok[aria-pressed=true] { background:var(--ok); color:#fff; } button.bad[aria-pressed=true] { background:var(--bad); color:#fff; }
+  label.f { display:grid; gap:2px; font-size:12px; color:var(--muted); }
+  label.f input.amount { text-align:right; font-variant-numeric:tabular-nums; }
+  label.f input, label.f select, label.f textarea { font:inherit; color:var(--text); border:1px solid var(--line); border-radius:6px; padding:4px 6px; }
+  .grid2 { display:grid; grid-template-columns:repeat(auto-fill, minmax(160px, 1fr)); gap:6px; }
+  dialog { border:none; border-radius:12px; padding:0; max-width:95vw; max-height:95vh; }
+  dialog img { display:block; max-width:95vw; max-height:86vh; }
+  .zoombar { display:flex; gap:10px; align-items:center; padding:8px 10px; border-bottom:1px solid var(--line); position:sticky; top:0; background:var(--panel); }
+  .zoombar #zoomclose { margin-left:auto; }
+  #zoom.orig img { outline:4px solid var(--warn); }
+  .empty { color:var(--muted); text-align:center; padding:40px; }
+  #picker { width:min(1200px, 96vw); height:92vh; padding:0; display:none; flex-direction:column; }
+  #picker[open] { display:flex; }
+  #picker::backdrop, #zoom::backdrop { background:rgba(0,0,0,.6); }
+  .pickhead { display:flex; justify-content:space-between; gap:12px; align-items:flex-start; padding:14px 16px; border-bottom:1px solid var(--line); }
+  .pickfilters { display:flex; gap:12px; align-items:center; flex-wrap:wrap; padding:10px 16px; border-bottom:1px solid var(--line); }
+  .pickfilters input[type=search] { flex:1 1 320px; font:inherit; border:1px solid var(--line); border-radius:8px; padding:6px 8px; }
+  label.inline { display:inline-flex; gap:6px; align-items:center; font-size:13px; }
+  .pickgrid { flex:1; overflow-y:auto; padding:16px; display:grid; gap:12px; grid-template-columns:repeat(auto-fill, minmax(220px, 1fr)); align-content:start; }
+  .pickcard { border:1px solid var(--line); border-radius:10px; padding:8px; display:grid; gap:6px; align-content:start; background:#fff; }
+  .pickcard.linked { background:#fafafa; }
+  .pickcard > img { width:100%; height:240px; object-fit:cover; object-position:top; border:1px solid var(--line); border-radius:6px; cursor:zoom-in; }
+  .pickcard .thumbs img { height:56px; }
+  .noimg { height:240px; display:grid; place-items:center; color:var(--muted); background:#fafafa; border-radius:6px; }
+  .clamp { display:-webkit-box; -webkit-line-clamp:3; -webkit-box-orient:vertical; overflow:hidden; }
+  .cover { display:grid; gap:4px; }
+  .bar { height:6px; background:var(--line); border-radius:999px; overflow:hidden; }
+  .bar > span { display:block; height:100%; background:var(--ok); }
+  .bar.partial > span { background:var(--warn); }
+  .linkeditems { display:grid; gap:4px; }
+  .linkeditem { display:flex; gap:6px; align-items:center; font-size:12px; }
+  .linkeditem img { height:32px; border:1px solid var(--line); border-radius:4px; cursor:zoom-in; }
+  .linkeditem .amount { margin-left:auto; }
+  .pickfilters select { font:inherit; border:1px solid var(--line); border-radius:8px; padding:5px 6px; }
+  main.wide { max-width:1600px; }
+  .split { display:grid; grid-template-columns:minmax(0,1fr) minmax(0,1fr); gap:16px; align-items:start; }
+  .col { display:grid; gap:10px; align-content:start; position:sticky; top:64px; max-height:calc(100vh - 84px); overflow-y:auto; padding-right:4px; }
+  .colhead { position:sticky; top:0; z-index:2; background:var(--bg); padding:4px 0 8px; display:grid; gap:6px; }
+  .monthhead { font-weight:600; font-size:13px; color:var(--muted); text-transform:uppercase; letter-spacing:.04em; padding-top:6px; }
+  .card.sel { border-color:var(--primary); box-shadow:0 0 0 2px color-mix(in srgb, var(--primary) 25%, transparent); }
+  .card.near { border-color:color-mix(in srgb, var(--primary) 45%, var(--line)); }
+  .card.compact { padding:10px; gap:6px; }
+  .evid { display:flex; gap:10px; align-items:flex-start; }
+  .evid > img { width:72px; height:96px; object-fit:cover; object-position:top; border:1px solid var(--line); border-radius:6px; cursor:zoom-in; flex:none; }
+  .evid .noimg { width:72px; height:96px; font-size:11px; flex:none; }
+  @media (max-width: 900px) { .split { grid-template-columns:1fr; } .col { position:static; max-height:none; overflow:visible; } }
+  .reject { display:grid; gap:6px; border:1px solid var(--bad); border-radius:8px; padding:8px; background:#fff; }
+  .reject select, .reject textarea { font:inherit; border:1px solid var(--line); border-radius:6px; padding:4px 6px; }
+  .note { border-left:3px solid var(--bad); padding:2px 8px; font-size:13px; }
+  .card.picked { border-color:var(--ok); background:color-mix(in srgb, var(--ok) 6%, #fff); }
+  .picksum { display:grid; gap:6px; border:1px solid var(--ok); border-radius:10px; padding:8px 10px; background:var(--panel); }
+  .picksum[hidden] { display:none; }
+  .proj { display:grid; gap:2px; font-size:13px; }
+  .months summary { cursor:pointer; }
+  .monthtable { border-collapse:collapse; width:100%; font-size:13px; }
+  .monthtable th, .monthtable td { text-align:left; padding:4px 8px; border-top:1px solid var(--line); font-variant-numeric:tabular-nums; }
+  .monthtable th { color:var(--muted); font-weight:500; font-size:12px; }
+  .monthtable tr.closed td { color:var(--muted); }
+  .monthtable tr.ready td { background:color-mix(in srgb, var(--ok) 8%, #fff); }
+  .monthtable td.open { color:var(--warn); font-weight:600; }
+  .monthtable tr.closed td.open { color:var(--muted); font-weight:400; }
+  .linkedto { display:grid; gap:2px; font-size:12px; }
+  .card.done { opacity:.75; }
+  #toast { position:fixed; bottom:16px; right:16px; background:#111827; color:#fff; padding:8px 12px; border-radius:8px; display:none; }
+</style>
+</head>
+<body>
+<header>
+  <h1>Revisión de comprobantes</h1>
+  <nav id="tabs"></nav>
+  <span class="hint">Las decisiones se guardan en data/work/review.json. Para publicarlas: <code>make publish-local</code></span>
+</header>
+<main id="main"><div class="empty">Cargando…</div></main>
+<dialog id="picker"></dialog>
+<dialog id="zoom">
+  <div class="zoombar">
+    <button class="act" id="zoomorig" type="button">Ver original (sin tapar)</button>
+    <span class="muted" id="zoomnote"></span>
+    <button class="act" type="button" id="zoomclose">Cerrar</button>
+  </div>
+  <img alt="">
+</dialog>
+<div id="toast"></div>
+<script>
+const number2 = new Intl.NumberFormat("es-AR", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+// $34.567,58 (es-AR, no space after the sign)
+const fmt = (n) => (n == null || !Number.isFinite(Number(n)) ? "—" : (n < 0 ? "-$" : "$") + number2.format(Math.abs(n)));
+
+// Amount typed by a person -> number. Accepts "$34.567,58", "34567,58", "34567.58", "34.567".
+function parseMoney(text) {
+  let t = String(text).replace(/[$\s\u00a0]/g, "");
+  if (!t) return null;
+  if (t.includes(",")) t = t.replace(/\./g, "").replace(",", ".");
+  else if (!/^-?\d+\.\d{1,2}$/.test(t)) t = t.replace(/\./g, ""); // dots as thousands separators
+  const n = Number(t);
+  return Number.isFinite(n) ? n : NaN;
+}
+let data = null;
+let tab = "pending"; // from the URL hash once TABS is known (a reload keeps the tab)
+const TABS = [
+  ["pending", "Para revisar"], ["unmatched", "Por mes"], ["receipts", "Comprobantes"],
+  ["movements", "Movimientos"], ["auto", "Vinculados"], ["rejected", "Rechazados"],
+];
+// "Comprobantes" / "Movimientos" filter: all | unlinked | unverified (receipts only).
+let receiptFilter = "all";
+// "Comprobantes" text filter: every word must appear (vendor, description, date, type,
+// amount, linked lines). One input element kept across renders, so typing keeps focus.
+let receiptText = "";
+const normText = (x) => String(x ?? "").toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "");
+const receiptSearch = el("input", { type: "search", placeholder: "Buscar comprobante: proveedor, descripción, importe, fecha…",
+  "aria-label": "Buscar comprobante", style: "width:100%; max-width:520px" });
+receiptSearch.addEventListener("input", () => {
+  receiptText = receiptSearch.value;
+  const pos = receiptSearch.selectionStart;
+  render();
+  receiptSearch.focus();
+  receiptSearch.setSelectionRange(pos, pos);
+});
+function receiptMatches(t) {
+  const words = normText(receiptText).split(/\s+/).filter(Boolean);
+  if (!words.length) return true;
+  const hay = normText([t.proveedor, t.descripcion, t.fecha, t.kind, t.letra, t.period, t.period && monthLabel(t.period),
+    fmt(t.total), t.total, ...(t.linked_to || []).map((x) => x.concepto)].join(" "));
+  // "34567" also finds $34.567,58: compare digits without thousand separators too.
+  const bare = hay.replace(/(\d)\.(?=\d{3})/g, "$1");
+  return words.every((w) => hay.includes(w) || bare.includes(w));
+}
+let movementFilter = "all";
+
+if (location.hash === "#unused") { tab = "receipts"; receiptFilter = "unlinked"; } // old tab
+else if (TABS.some(([k]) => k === location.hash.slice(1))) tab = location.hash.slice(1);
+
+// A month stays on screen (all its lines, receipts and bank movements, linked or not) until
+// the reviewer closes it; closed months show again with "Mostrar meses cerrados".
+let showClosed = false;
+const isOpen = (...periods) => {
+  const ps = periods.filter(Boolean);
+  const closed = new Set(data.closed_months || []);
+  return showClosed || !ps.length || ps.some((p) => !closed.has(p));
+};
+const lineOpen = (l) => isOpen(l.period);
+const evidOpen = (t) => isOpen(t.period, t.bundle_period); // its date's month or its bundle's
+const lineDone = (l) => !lacks(l, "receipt") && !lacks(l, "payment");
+
+// Where a receipt or bank movement went (it stays listed while its month is open).
+function linkedTag(t) {
+  const to = t.linked_to || [];
+  if (!to.length) return el("div", {}, el("span", { class: "tag pending" }, "Sin gasto"));
+  return el("div", { class: "linkedto" }, to.map((x) => el("div", {},
+    el("span", { class: `tag ${x.status}` }, x.status === "pending" ? "Propuesto" : x.status === "auto" ? "Vinculado (automático)" : "Vinculado"),
+    el("span", { class: "muted" }, ` a ${x.concepto} · ${monthLabel(x.period)}`))));
+}
+
+// Per month, from the server (review.month_status): what is still open. A month can only
+// be closed when nothing is ("Lista para cerrar"); the server refuses otherwise too.
+const monthRow = (p) => (data.months || []).find((r) => r.period === p);
+
+async function setMonth(p, closed) {
+  const r = monthRow(p);
+  if (closed && r && r.blockers.length) { toast(`${monthLabel(p)} todavía tiene ${r.blockers.join(", ")}`, 5000); return; }
+  await act({ type: "month", period: p, closed });
+}
+
+// One row per month: progress, whether it is ready, and close / reopen.
+function monthsBar() {
+  const rows = data.months || [];
+  const closedN = rows.filter((r) => r.closed).length;
+  const readyN = rows.filter((r) => r.ready && !r.closed).length;
+  const toggle = el("input", { type: "checkbox", checked: showClosed, onchange: (e) => { showClosed = e.target.checked; render(); } });
+  const cell = (n, of) => el("td", { class: n ? "open" : "" }, of == null ? String(n) : `${n} de ${of}`);
+  return el("details", { class: "card compact months", open: monthsOpen, ontoggle: (e) => { monthsOpen = e.target.open; } },
+    el("summary", {}, el("strong", {}, "Meses"),
+      el("span", { class: "muted" }, ` · ${rows.length - closedN} abiertos (${readyN} listos para cerrar), ${closedN} cerrados`)),
+    el("label", { class: "inline" }, toggle, " Mostrar meses cerrados"),
+    el("table", { class: "monthtable" },
+      el("tr", {}, ["Mes", "Estado", "Gastos sin cubrir", "Propuestas", "Comprobantes sin gasto", "Sin verificar", "Movimientos sin gasto", ""].map((h) => el("th", {}, h))),
+      rows.map((r) => el("tr", { class: r.closed ? "closed" : r.ready ? "ready" : "" },
+        el("td", {}, el("strong", {}, monthLabel(r.period))),
+        el("td", {}, r.closed ? el("span", { class: "tag verified" }, "Cerrado")
+          : r.ready ? el("span", { class: "tag verified" }, "Lista para cerrar")
+          : el("span", { class: "tag pending", title: r.blockers.join(", ") }, "Con pendientes")),
+        cell(r.lines - r.covered, r.lines), cell(r.pending), cell(r.receipts_free, r.receipts), cell(r.unverified), cell(r.movements_free, r.movements),
+        el("td", {}, r.closed ? el("button", { class: "act", onclick: () => setMonth(r.period, false) }, "Reabrir")
+          : el("button", { class: "act ok", disabled: !r.ready, title: r.ready ? "" : `Falta: ${r.blockers.join(", ")}`,
+              onclick: () => setMonth(r.period, true) }, "Cerrar mes"))))));
+}
+let monthsOpen = true;
+
+function filterBtns(options, current, set) {
+  return el("div", { class: "row", style: "align-items:center" }, el("span", { class: "muted" }, "Mostrar:"),
+    options.map(([k, label, n]) => el("button", { class: "act", "aria-pressed": current === k, onclick: () => { set(k); render(); } }, `${label} (${n})`)));
+}
+
+function el(tag, attrs = {}, ...kids) {
+  const e = document.createElement(tag);
+  for (const [k, v] of Object.entries(attrs)) {
+    if (k.startsWith("on")) e.addEventListener(k.slice(2), v);
+    else if (v !== false && v != null) e.setAttribute(k, v === true ? "" : v);
+  }
+  for (const k of kids.flat()) if (k != null) e.append(k.nodeType ? k : String(k));
+  return e;
+}
+
+async function load() {
+  const r = await fetch("/api/queue");
+  data = await r.json();
+  // The page is read on every request but the server's code only at start: an older server
+  // lacks these fields and everything would look unlinked.
+  if (!Array.isArray(data.closed_months)) {
+    document.getElementById("main").replaceChildren(el("div", { class: "empty" },
+      "El servidor de revisión es de una versión anterior. Cortalo (Ctrl+C) y volvé a correr make review."));
+    return;
+  }
+  render();
+}
+
+async function act(body) {
+  const r = await fetch("/api/action", { method: "POST", headers: { "Content-Type": "application/json", "X-Review": "1" }, body: JSON.stringify(body) });
+  if (!r.ok) { toast("Error: " + (await r.text())); return; }
+  toast("Guardado");
+  await load();
+}
+
+function toast(msg, ms = 1500) {
+  const t = document.getElementById("toast");
+  t.textContent = msg; t.style.display = "block";
+  clearTimeout(t._h); t._h = setTimeout(() => (t.style.display = "none"), ms);
+}
+
+function thumbs(pages) {
+  if (!pages.length) return el("span", { class: "muted" }, "Sin imagen (página privada)");
+  return el("div", { class: "thumbs" }, pages.map((p) => {
+    const src = `/img/${p.doc}/${p.page}.webp`;
+    return el("img", { src, alt: `Página ${p.page}`, loading: "lazy", onclick: () => zoom(src) });
+  }));
+}
+
+// A private receipt (payroll page): only the amount/period boxes, cropped from the original
+// by the local review server (never stored or published; the page itself is never shown).
+function privateCrops(t) {
+  if (!(t.crops || []).length) return el("span", { class: "muted" }, "Sin recorte del importe (página privada): falta `crops` en la transcripción");
+  return el("div", { class: "crops" }, t.crops.map((c) =>
+    el("figure", { style: "margin:0" },
+      el("figcaption", { class: "muted" }, c.campo === "importe" ? "Importe (recorte del original)" : "Período (recorte del original)"),
+      el("img", { src: c.url, alt: c.campo, loading: "lazy", style: "max-width:100%; border:1px solid var(--border, #ccc); cursor:zoom-in", onclick: () => zoom(c.url) }))));
+}
+
+// First image of a receipt/payment: its first page, or for a private receipt (payroll page)
+// its amount crop. `fallback` is what to show when there is neither.
+function firstImage(t, fallback = null) {
+  if (t.privado && (t.crops || []).length) {
+    const c = t.crops.find((x) => x.campo === "importe") || t.crops[0];
+    return el("img", { src: c.url, alt: "Importe (recorte del original)", title: "Recorte del original (página privada)", loading: "lazy", onclick: () => zoom(c.url) });
+  }
+  if (!t.pages.length) return fallback;
+  const src = `/img/${t.pages[0].doc}/${t.pages[0].page}.webp`;
+  return el("img", { src, alt: `Página ${t.pages[0].page}`, loading: "lazy", onclick: () => zoom(src) });
+}
+
+// Page viewer. "Ver original" shows the page from the administrator's PDF without the
+// blackouts (rendered by the local review server only; never stored or published), to read
+// an amount or description a blackout covers. Then reject with "tapado por la redacción"
+// if the published page should show it.
+let zoomSrc = null;
+function zoom(src) {
+  const d = document.getElementById("zoom");
+  zoomSrc = src;
+  const m = src.match(/^\/img\/([0-9a-f]{16})\/(\d+)\.webp$/);
+  const orig = document.getElementById("zoomorig");
+  orig.hidden = !m;
+  showZoom(false);
+  d.showModal();
+}
+function showZoom(original) {
+  const d = document.getElementById("zoom");
+  const m = zoomSrc.match(/^\/img\/([0-9a-f]{16})\/(\d+)\.webp$/);
+  d.classList.toggle("orig", original);
+  d.querySelector("img").src = original && m ? `/orig/${m[1]}/${m[2]}.png` : zoomSrc;
+  document.getElementById("zoomorig").textContent = original ? "Ver versión publicada" : "Ver original (sin tapar)";
+  document.getElementById("zoomnote").textContent = original ? "Original sin tapar: solo en esta revisión local, no se publica." : "";
+}
+document.getElementById("zoomorig").addEventListener("click", () => showZoom(!document.getElementById("zoom").classList.contains("orig")));
+document.getElementById("zoomclose").addEventListener("click", () => document.getElementById("zoom").close());
+document.getElementById("zoom").querySelector("img").addEventListener("click", () => document.getElementById("zoom").close());
+document.getElementById("zoom").querySelector("img").addEventListener("error", () => {
+  if (document.getElementById("zoom").classList.contains("orig")) { toast("No se encontró el PDF original en data/inbox"); showZoom(false); }
+});
+
+function lineBlock(line) {
+  return el("div", { class: "line" },
+    el("div", { class: "muted" }, `${line.period} · ${line.rubro}`),
+    el("div", {}, el("strong", {}, line.concepto), line.detalle ? ` — ${line.detalle}` : ""),
+    el("div", { class: "amount" }, fmt(line.importe)));
+}
+
+const MONTHS = ["ene", "feb", "mar", "abr", "may", "jun", "jul", "ago", "sep", "oct", "nov", "dic"];
+const monthLabel = (p) => { const [y, m] = p.split("-").map(Number); return `${MONTHS[m - 1]} ${y}`; };
+const STATUS = { pending: "Propuesto", auto: "Automático", verified: "Confirmado" };
+
+const SIDES = [["receipt", "ticket", "Comprobantes"], ["payment", "payment", "Pago bancario"]];
+
+// A small difference left on one side (rounding, a few pesos of bank charges) can be accepted
+// by hand so the side counts as complete: up to $1.000 or 2 % of the line, with something linked.
+const smallDiff = (line, side) => side.covered > 0 && side.remaining > 0.01 && side.remaining <= Math.max(1000, line.importe * 0.02);
+async function acceptDiff(line, key, side) {
+  const detalle = prompt(`Aceptar ${fmt(side.remaining)} de diferencia en ${key === "payment" ? "el pago bancario" : "los comprobantes"} de «${line.concepto}».\nMotivo (opcional):`, "Diferencia menor");
+  if (detalle === null) return;
+  await act({ type: "accept_diff", line_id: line.id, side: key, importe: side.remaining, detalle });
+}
+
+// A line needs both a receipt and a bank payment (Banco Roela): how much of it each side
+// covers, and which receipts / payments they are.
+function coverageBlock(line, { items = true } = {}) {
+  if (!line.receipt) return null; // server from an older version
+  return el("div", { class: "cover" }, SIDES.map(([key, type, label]) => {
+    const side = line[key];
+    const linked = line.items.filter((i) => i.type === type);
+    if (!side.needed) return el("div", { class: "muted" }, `${label}: no hace falta (no hay ${type === "payment" ? "resumen bancario" : "comprobantes"} de ese mes)`);
+    const pct = line.importe > 0 ? Math.min(100, (side.covered / line.importe) * 100) : 0;
+    return el("div", { class: "cover" },
+      el("div", { class: "row", style: "align-items:center; gap:8px" },
+        el("strong", { style: "font-size:12px" }, label),
+        el("span", { class: "muted" }, `${fmt(side.covered)} de ${fmt(line.importe)}`),
+        side.settled ? el("span", { class: "tag verified" }, side.accepted ? `Completo · diferencia aceptada ${fmt(side.remaining)}` : "Completo")
+          : el("span", { class: "tag pending" }, side.covered > 0 ? `Falta ${fmt(side.remaining)}` : `Sin ${type === "payment" ? "pago" : "comprobante"}`),
+        side.accepted ? el("button", { class: "act", onclick: () => act({ type: "accept_diff", line_id: line.id, side: key, importe: null }) }, "Deshacer")
+          : !side.settled && smallDiff(line, side) ? el("button", { class: "act ok", onclick: () => acceptDiff(line, key, side) }, `Aceptar diferencia de ${fmt(side.remaining)}`) : null,
+        side.proposed > 0 ? el("span", { class: "muted" }, `+ ${fmt(side.proposed)} propuesto, sin confirmar`) : null),
+      el("div", { class: `bar ${side.settled ? "" : "partial"}` }, el("span", { style: `width:${pct}%` })),
+      items && linked.length ? el("div", { class: "linkeditems" }, linked.map((i) => el("div", { class: "linkeditem" },
+        firstImage(i),
+        el("span", {}, i.proveedor || "(sin proveedor)", i.fecha ? el("span", { class: "muted" }, ` · ${i.fecha}`) : null),
+        el("span", { class: `tag ${i.status}` }, STATUS[i.status]),
+        i.shared > 1 ? el("span", { class: "muted" }, `compartido con ${i.shared} gastos`) : null,
+        el("span", { class: "amount" }, fmt(i.total))))) : null);
+  }));
+}
+
+// Lines missing a side (needed and not complete), for the filters of the tabs.
+const lacks = (line, key) => line[key] && line[key].needed && !line[key].settled;
+let need = "all";
+function needFilter(lines) {
+  const n = (k) => lines.filter((l) => k === "all" || (k === "both" ? !lacks(l, "receipt") && !lacks(l, "payment") : lacks(l, k))).length;
+  return el("div", { class: "row", style: "align-items:center" }, el("span", { class: "muted" }, "Mostrar:"),
+    [["all", "Todos"], ["receipt", "Falta comprobante"], ["payment", "Falta pago bancario"], ["both", "Completos"]].map(([k, label]) =>
+      el("button", { class: "act", "aria-pressed": need === k, onclick: () => { need = k; render(); } }, `${label} (${n(k)})`)));
+}
+const passesNeed = (l) => need === "all" || (need === "both" ? !lacks(l, "receipt") && !lacks(l, "payment") : lacks(l, need));
+
+// Decision on a line <-> receipt link, or line <-> bank payment (t.type === "payment").
+function linkBody(t, lineId, decision) {
+  return t.type === "payment"
+    ? { type: "payment", line_id: lineId, movement_id: t.id, decision }
+    : { type: "link", line_id: lineId, ticket_id: t.id, decision };
+}
+
+// Rejecting asks why: the reason goes to review.json (notes) so the data can be fixed
+// (`make review-notes`). `note` = the current reason when editing it.
+// `keep`: the other undecided items of the same proposal; they stay proposed for this line.
+function rejectForm(t, lineId, note, onCancel, keep = []) {
+  const reasons = data.reject_reasons || [];
+  const sel = el("select", { "aria-label": "Motivo" }, el("option", { value: "" }, "Elegí un motivo…"),
+    reasons.map((r) => el("option", { value: r, selected: note && note.motivo === r }, r[0].toUpperCase() + r.slice(1))));
+  const txt = el("textarea", { rows: 2, placeholder: "Qué viste (opcional): el gasto correcto, el mes, el dato mal transcripto…" }, note ? note.detalle : "");
+  const save = () => {
+    if (!sel.value) { toast("Elegí un motivo"); sel.focus(); return; }
+    act({ ...linkBody(t, lineId, "rejected"), motivo: sel.value, detalle: txt.value, keep });
+  };
+  return el("div", { class: "reject" },
+    el("strong", { style: "font-size:12px" }, note ? "Motivo del rechazo" : "¿Por qué lo rechazás?"), sel, txt,
+    el("div", { class: "row" },
+      el("button", { class: "act bad", onclick: save }, note ? "Guardar motivo" : "Rechazar"),
+      onCancel ? el("button", { class: "act", onclick: onCancel }, "Cancelar") : null));
+}
+
+function noteView(note) {
+  if (!note) return el("div", { class: "note muted" }, "Rechazado sin motivo.");
+  return el("div", { class: "note" }, el("strong", {}, note.motivo), note.detalle ? ` — ${note.detalle}` : "",
+    el("span", { class: "muted" }, ` · ${note.fecha}`));
+}
+
+function ticketMini(t, group) {
+  const decision = group.decisions[t.id];
+  const card = el("div", { class: `ticket ${decision || ""}` },
+    el("div", {}, el("strong", {}, t.proveedor || "(sin proveedor)"), " ", el("span", { class: "amount" }, fmt(t.total))),
+    el("div", { class: "muted" }, [t.kind, t.letra, t.fecha].filter(Boolean).join(" · ")),
+    t.descripcion ? el("div", { class: "muted" }, t.descripcion) : null,
+    t.privado ? privateCrops(t) : thumbs(t.pages),
+    el("div", { class: "row" },
+      el("button", { class: "act ok", "aria-pressed": decision === "verified", onclick: () => act(linkBody(t, group.line.id, decision === "verified" ? null : "verified")) }, "Confirmar"),
+      decision === "rejected"
+        ? el("button", { class: "act bad", "aria-pressed": true, onclick: () => act(linkBody(t, group.line.id, null)) }, "Deshacer rechazo")
+        : el("button", { class: "act bad", onclick: (e) => {
+            const btns = e.currentTarget.parentElement;
+            btns.hidden = true;
+            const keep = group.tickets.filter((x) => x.id !== t.id && !["verified", "rejected"].includes(group.decisions[x.id])).map((x) => x.id);
+            const form = rejectForm(t, group.line.id, null, () => { form.remove(); btns.hidden = false; }, keep);
+            if (keep.length) form.append(el("div", { class: "muted" }, `Los otros ${keep.length} de esta propuesta siguen para revisar.`));
+            card.append(form);
+            form.querySelector("select").focus();
+          } }, "Rechazar…")));
+  return card;
+}
+
+// Link any receipt (or bank payment) to a line by hand: a full-screen gallery with each
+// one's image; the line's month (and the one before) first, closest amount first.
+function prevPeriod(p) {
+  const [y, m] = p.split("-").map(Number);
+  return m === 1 ? `${y - 1}-12` : `${y}-${String(m - 1).padStart(2, "0")}`;
+}
+
+function openPicker(line, exclude) {
+  const dlg = document.getElementById("picker");
+  if (!data.all_receipts || !data.all_movements) { toast("Reiniciá make review: el servidor es de una versión anterior"); return; }
+  let source = lacks(line, "payment") && !lacks(line, "receipt") ? "movements" : "receipts";
+  const sourceBtns = [["receipts", "Comprobantes"], ["movements", "Movimientos bancarios"]].map(([k, label]) =>
+    el("button", { class: "act", "aria-pressed": k === source, onclick: (e) => {
+      source = k; sourceBtns.forEach((b) => b.setAttribute("aria-pressed", b === e.currentTarget)); draw(); } }, label));
+  const near = new Set([line.period, prevPeriod(line.period)]);
+  const q = el("input", { type: "search", placeholder: "Filtrar por proveedor, descripción, fecha o importe…" });
+  const onlyNear = el("input", { type: "checkbox", checked: true });
+  const grid = el("div", { class: "pickgrid" });
+  const count = el("span", { class: "muted" });
+  const norm = (x) => String(x ?? "").toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "");
+  const want = () => line[source === "movements" ? "payment" : "receipt"]?.remaining ?? line.importe;
+  const isNear = (t) => near.has(t.period) || near.has(t.bundle_period); // its date's month or its bundle's
+  const draw = () => {
+    const words = norm(q.value).split(/\s+/).filter(Boolean);
+    const receipts = source === "movements" ? data.all_movements : data.all_receipts;
+    const rows = receipts
+      .filter((t) => !exclude.includes(`${source === "movements" ? "payment" : "ticket"}:${t.id}`))
+      .filter((t) => !onlyNear.checked || near.has(t.period) || near.has(t.bundle_period))
+      .filter((t) => {
+        const hay = norm(`${t.proveedor} ${t.descripcion} ${t.fecha} ${t.kind} ${fmt(t.total)} ${t.total}`);
+        return words.every((w) => hay.includes(w));
+      })
+      .sort((a, b) => (isNear(b) - isNear(a)) || Math.abs(a.total - want()) - Math.abs(b.total - want()));
+    count.textContent = `${rows.length} ${source === "movements" ? "movimientos" : "comprobantes"}`;
+    grid.replaceChildren(...rows.map((t) => el("article", { class: `pickcard ${t.linked ? "linked" : ""}` },
+      firstImage(t, el("div", { class: "noimg" }, "Sin imagen")),
+      t.type !== "payment" && t.pages.length > 1 ? el("div", { class: "thumbs" }, t.pages.slice(1).map((p) => el("img", { src: `/img/${p.doc}/${p.page}.webp`, alt: `Página ${p.page}`, loading: "lazy", onclick: () => zoom(`/img/${p.doc}/${p.page}.webp`) }))) : null,
+      el("div", {}, el("strong", {}, t.proveedor || "(sin proveedor)")),
+      el("div", { class: "amount" }, fmt(t.total)),
+      el("div", { class: "muted" }, [t.kind, t.fecha ?? t.period, t.pages.length ? `pág. ${t.pages.map((p) => p.page).join(", ")}` : null].filter(Boolean).join(" · ")),
+      t.descripcion ? el("div", { class: "muted clamp" }, t.descripcion) : null,
+      t.linked ? el("span", { class: "tag auto" }, "Ya vinculado a otro gasto") : null,
+      el("button", { class: "act ok", onclick: async () => { dlg.close(); await act(linkBody(t, line.id, "verified")); } }, "Vincular a este gasto"))));
+    if (!rows.length) grid.replaceChildren(el("div", { class: "empty" }, source === "movements" && !data.all_movements.length
+      ? "No hay resúmenes bancarios cargados."
+      : "Nada coincide. Probá sin el filtro de período."));
+  };
+  q.addEventListener("input", draw);
+  onlyNear.addEventListener("change", draw);
+  dlg.replaceChildren(
+    el("div", { class: "pickhead" },
+      el("div", {},
+        el("div", { class: "muted" }, `Vincular comprobante o pago · ${line.period} · ${line.rubro}`),
+        el("div", {}, el("strong", {}, line.concepto), line.detalle ? ` — ${line.detalle}` : "", " ", el("span", { class: "amount" }, fmt(line.importe)))),
+      el("button", { class: "act", onclick: () => dlg.close() }, "Cerrar")),
+    el("div", { class: "pickfilters" }, ...sourceBtns, q, el("label", { class: "inline" }, onlyNear, " Solo de este período y el anterior"), count),
+    grid);
+  draw();
+  dlg.showModal();
+  q.focus();
+}
+
+// The other way round: pick the expense line for a receipt that has none. Lines of the
+// receipt's month and the next one first (a receipt is billed in that liquidación or the
+// following), closest amount first.
+function nextPeriod(p) {
+  const [y, m] = p.split("-").map(Number);
+  return m === 12 ? `${y + 1}-01` : `${y}-${String(m + 1).padStart(2, "0")}`;
+}
+
+function openLinePicker(t) {
+  const dlg = document.getElementById("picker");
+  if (!data.all_lines) { toast("Reiniciá make review: el servidor es de una versión anterior"); return; }
+  // The receipt's own month and its bundle's (an old receipt billed later), and the next of each.
+  const near = new Set([t.period, t.bundle_period].filter(Boolean).flatMap((p) => [p, nextPeriod(p)]));
+  const q = el("input", { type: "search", placeholder: "Filtrar por rubro, concepto, detalle, período o importe…" });
+  const periods = data.periods || [...new Set(data.all_lines.map((l) => l.period))].sort();
+  const month = el("select", { "aria-label": "Mes" },
+    near.size ? el("option", { value: "near" }, `${[...new Set([t.period, t.bundle_period].filter(Boolean))].map(monthLabel).join(" / ")} y el siguiente`) : null,
+    [...periods].reverse().map((p) => el("option", { value: p }, monthLabel(p))),
+    el("option", { value: "all" }, "Todos los meses"));
+  month.value = near.size ? "near" : "all";
+  const inMonth = (p) => month.value === "all" || (month.value === "near" ? near.has(p) : p === month.value);
+  const isPay = t.type === "payment";
+  const side = isPay ? "payment" : "receipt";
+  const what = isPay ? "este pago" : "este comprobante";
+  const left = (l) => l[side]?.remaining ?? l.importe;
+  const done = (l) => !!l[side]?.settled;
+  const grid = el("div", { class: "pickgrid" });
+  const count = el("span", { class: "muted" });
+  const norm = (x) => String(x ?? "").toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "");
+  const draw = () => {
+    const words = norm(q.value).split(/\s+/).filter(Boolean);
+    const rows = data.all_lines
+      .filter((l) => inMonth(l.period))
+      .filter((l) => {
+        const hay = norm(`${l.period} ${l.rubro} ${l.concepto} ${l.detalle} ${fmt(l.importe)} ${l.importe}`);
+        return words.every((w) => hay.includes(w));
+      })
+      .sort((a, b) => (done(a) - done(b)) || (near.has(b.period) - near.has(a.period)) || Math.abs(left(a) - t.total) - Math.abs(left(b) - t.total));
+    count.textContent = `${rows.length} gastos`;
+    grid.replaceChildren(...rows.map((l) => {
+      const here = (l.items || []).some((i) => i.type === (isPay ? "payment" : "ticket") && i.id === t.id);
+      const after = Math.round((left(l) - t.total) * 100) / 100;
+      return el("article", { class: `pickcard ${done(l) ? "linked" : ""}` },
+        el("div", { class: "muted" }, `${monthLabel(l.period)} · ${l.rubro}`),
+        el("div", {}, el("strong", {}, l.concepto), l.detalle ? ` — ${l.detalle}` : ""),
+        el("div", { class: "amount" }, fmt(l.importe)),
+        coverageBlock(l),
+        l.pages.length ? el("button", { class: "act", onclick: () => zoom(`/img/${l.pages[0].doc}/${l.pages[0].page}.webp`) }, `Ver liquidación (pág. ${l.pages[0].page})`) : null,
+        here ? el("span", { class: "tag verified" }, `Ya vinculado a ${what}`)
+          : el("div", { class: "muted" }, Math.abs(after) <= 0.01 ? `Con ${what}: ${isPay ? "pago" : "comprobantes"} completo${isPay ? "" : "s"}`
+            : after > 0 ? `Con ${what}: falta ${fmt(after)}` : `Con ${what}: excede por ${fmt(-after)}`),
+        el("button", { class: "act ok", disabled: here, onclick: async () => { dlg.close(); await act(linkBody(t, l.id, "verified")); } }, "Vincular a este gasto"));
+    }));
+    if (!rows.length) grid.replaceChildren(el("div", { class: "empty" }, "Nada coincide. Probá con otro mes."));
+  };
+  q.addEventListener("input", draw);
+  month.addEventListener("change", draw);
+  dlg.replaceChildren(
+    el("div", { class: "pickhead" },
+      el("div", { class: "row" },
+        t.privado ? privateCrops(t) : el("div", { class: "thumbs" }, t.pages.slice(0, 2).map((p) => el("img", { src: `/img/${p.doc}/${p.page}.webp`, alt: `Página ${p.page}`, onclick: () => zoom(`/img/${p.doc}/${p.page}.webp`) }))),
+        el("div", {},
+          el("div", { class: "muted" }, `Vincular a un gasto · ${[t.kind, t.fecha ?? t.period].filter(Boolean).join(" · ")}`),
+          el("div", {}, el("strong", {}, t.proveedor || "(sin proveedor)"), " ", el("span", { class: "amount" }, fmt(t.total))),
+          t.descripcion ? el("div", { class: "muted clamp" }, t.descripcion) : null)),
+      el("button", { class: "act", onclick: () => dlg.close() }, "Cerrar")),
+    el("div", { class: "pickfilters" }, q, el("label", { class: "inline" }, "Mes ", month), count),
+    grid);
+  draw();
+  dlg.showModal();
+  q.focus();
+}
+
+function linkPicker(line, exclude = []) {
+  return el("div", { class: "pickwrap" }, el("button", { class: "act", onclick: () => openPicker(line, exclude) }, "Vincular comprobante o pago…"));
+}
+
+// Every link group of one line (receipts and bank payment) in one card.
+function lineCard(gs) {
+  const line = gs[0].line;
+  return el("section", { class: "card" },
+    el("div", { class: "row" }, lineBlock(line),
+      el("div", { style: "flex:1 1 320px" }, coverageBlock(line, { items: false }))),
+    gs.map((g) => groupBody(g)),
+    linkPicker(line, gs.flatMap((g) => g.tickets.map((t) => `${g.type}:${t.id}`))));
+}
+
+function byLine(groups) {
+  const m = new Map();
+  for (const g of groups) { if (!m.has(g.line.id)) m.set(g.line.id, []); m.get(g.line.id).push(g); }
+  return [...m.values()];
+}
+
+function groupBody(g) {
+  const sum = g.tickets.reduce((s, t) => s + (t.total || 0), 0);
+  const all = async () => { for (const t of g.tickets) await fetch("/api/action", { method: "POST", headers: { "Content-Type": "application/json", "X-Review": "1" }, body: JSON.stringify(linkBody(t, g.line.id, "verified")) }); toast("Guardado"); load(); };
+  return el("div", { style: "display:grid; gap:8px; border-top:1px solid var(--line); padding-top:8px" },
+    el("div", { class: "row", style: "align-items:center" },
+      el("strong", {}, g.type === "payment" ? "Pago bancario" : "Comprobantes"),
+      el("span", { class: `tag ${g.status}` }, { pending: "Para revisar", auto: "Automático", verified: "Confirmado" }[g.status]),
+      el("span", { class: "muted" }, `${g.reason} · puntaje ${g.score.toFixed(2)}`),
+      g.tickets.length > 1 ? el("span", { class: "muted" }, `Suma: ${fmt(sum)}`) : null,
+      g.status !== "verified" ? el("button", { class: "act ok", onclick: all }, "Confirmar todos") : null),
+    el("div", { class: "tickets" }, g.tickets.map((t) => ticketMini(t, g))));
+}
+
+// Unsaved edits survive the reload that follows any save (keyed by receipt id).
+const drafts = {};
+
+function receiptCard(t, { linkable = false } = {}) {
+  const draft = drafts[t.id] || {};
+  const f = {};
+  const dirtyTag = el("span", { class: "tag pending", hidden: !drafts[t.id] }, "Cambios sin guardar");
+  const track = (name, node) => {
+    f[name] = node;
+    node.addEventListener("input", () => { (drafts[t.id] ||= {})[name] = node.value; dirtyTag.hidden = false; });
+    return node;
+  };
+  const value = (name) => (name in draft ? draft[name] : t[name] ?? "");
+  const input = (name, label, type = "text") =>
+    el("label", { class: "f" }, label, track(name, el("input", { type, value: value(name) })));
+  // Money field: shown as $34.567,58, reformatted when leaving the field.
+  const moneyInput = (name, label) => {
+    const raw = value(name);
+    const i = el("input", { type: "text", inputmode: "decimal", value: name in draft ? raw : fmt(raw === "" ? null : Number(raw)), class: "amount" });
+    i.addEventListener("blur", () => {
+      const n = parseMoney(i.value);
+      if (n != null && !Number.isNaN(n)) i.value = fmt(n);
+    });
+    return el("label", { class: "f" }, label, track(name, i));
+  };
+  const kinds = ["factura", "recibo", "presupuesto", "ticket", "servicio", "nota_credito", "nota_debito", "otro"];
+  const sel = track("kind", el("select", {}, kinds.map((k) => el("option", { value: k, selected: k === value("kind") }, k))));
+  const desc = track("descripcion", el("textarea", { rows: 2 }, value("descripcion")));
+  const save = async () => {
+    const fields = Object.fromEntries(Object.entries(f).map(([k, v]) => [k, v.value]));
+    const total = parseMoney(fields.total);
+    if (Number.isNaN(total)) { toast("Total inválido: usá por ejemplo $34.567,58"); return; }
+    fields.total = total;
+    delete drafts[t.id];
+    await act({ type: "edit", id: t.id, fields });
+  };
+  return el("section", { class: `card ${t.verified ? "verified" : ""}` },
+    el("div", { class: "row" },
+      el("div", { class: "line" }, t.privado ? privateCrops(t) : thumbs(t.pages)),
+      el("div", { style: "flex:1 1 360px; display:grid; gap:6px" },
+        el("div", {}, el("span", { class: `tag ${t.verified ? "verified" : "pending"}` }, t.verified ? "Verificado" : "Sin verificar"),
+          " ", dirtyTag,
+          " ", el("span", { class: "muted" }, t.source === "qr" ? "Datos del QR de ARCA (exactos)" : `Transcripción · confianza ${t.confidence}`)),
+        datedHint(t),
+        linkedTag(t),
+        el("div", { class: "grid2" }, input("proveedor", "Proveedor"), input("fecha", "Fecha (AAAA-MM-DD)"), moneyInput("total", "Total"),
+          el("label", { class: "f" }, "Tipo", sel)),
+        el("label", { class: "f" }, "Descripción", desc),
+        el("div", { class: "row" },
+          t.privado ? el("span", { class: "muted" }, "Documento privado (página de sueldos): no se edita acá ni se publica la página.")
+            : el("button", { class: "act", onclick: save }, "Guardar cambios"),
+          el("button", { class: "act ok", "aria-pressed": t.verified, onclick: () => act({ type: "ticket", id: t.id, verified: !t.verified }) }, t.verified ? "Verificado ✓" : "Marcar verificado"),
+          linkable ? el("button", { class: "act", onclick: () => openLinePicker(t) }, "Vincular a un gasto…") : null))));
+}
+
+// A bank debit not linked to any line yet (bank charges show their breakdown: commissions,
+// VAT, the tax on bank debits and credits).
+function movementCard(m) {
+  return el("section", { class: "card" },
+    el("div", { class: "row" },
+      el("div", { class: "line" }, thumbs(m.pages)),
+      el("div", { style: "flex:1 1 360px; display:grid; gap:6px" },
+        el("div", { class: "muted" }, [monthLabel(m.period), m.fecha, m.kind].filter(Boolean).join(" · ")),
+        el("div", {}, el("strong", {}, m.proveedor), " ", el("span", { class: "amount" }, fmt(m.total))),
+        m.descripcion ? el("div", { class: "muted" }, m.descripcion) : null,
+        linkedTag(m),
+        el("div", { class: "row" }, el("button", { class: "act", onclick: () => openLinePicker(m) }, m.linked ? "Vincular también a otro gasto…" : "Vincular a un gasto…")))));
+}
+
+// "Por mes": the lines on the left, the receipts and bank payments on the right (all of the
+// open months, linked or not), both grouped by month. Pick a line, then link evidence to it.
+let selLine = null; // id of the selected line (kept across reloads)
+let splitMonth = "all";
+let evidKind = "all"; // all | ticket | payment
+// Receipts and payments marked to link together to the selected line ("type:id" -> item).
+// Only in the page: nothing is saved until "Vincular marcados".
+const picked = new Map();
+const pickKey = (t) => `${t.type}:${t.id}`;
+
+// What the selected line would look like with the marked items: per side, what is left.
+function projection(sel) {
+  const marked = [...picked.values()];
+  return SIDES.map(([key, type, label]) => {
+    const items = marked.filter((t) => t.type === type);
+    if (!items.length) return null;
+    const sum = items.reduce((s, t) => s + (t.total || 0), 0);
+    const side = sel[key];
+    const after = Math.round((side.remaining - sum) * 100) / 100;
+    const verdict = Math.abs(after) <= 0.01 ? el("span", { class: "tag verified" }, "Queda completo")
+      : after > 0 ? el("span", { class: "tag pending" }, `Falta ${fmt(after)}`)
+      : el("span", { class: "tag pending", style: "color:var(--bad); border-color:var(--bad)" }, `Excede por ${fmt(-after)}`);
+    return el("div", { class: "row", style: "align-items:center; gap:6px" },
+      el("strong", {}, label), el("span", { class: "muted" }, `${items.length} marcado${items.length > 1 ? "s" : ""} · ${fmt(sum)} · faltaba ${fmt(side.remaining)}`), verdict);
+  }).filter(Boolean);
+}
+
+async function linkPicked(sel) {
+  const items = [...picked.values()];
+  let ok = 0;
+  const errors = [];
+  for (const t of items) {
+    const r = await fetch("/api/action", { method: "POST", headers: { "Content-Type": "application/json", "X-Review": "1" }, body: JSON.stringify(linkBody(t, sel.id, "verified")) });
+    if (r.ok) { ok++; picked.delete(pickKey(t)); }
+    else errors.push(`${t.proveedor || "(sin proveedor)"} ${fmt(t.total)}: ${await r.text()}`);
+  }
+  toast(errors.length ? `${ok} vinculados; ${errors.length} con error. ${errors[0]}` : `${ok} vinculados al gasto`, errors.length ? 6000 : 2000);
+  await load();
+}
+
+// Receipts are grouped by the month of the bundle they came in (what the matcher uses);
+// bank movements, which have no bundle, by their statement month.
+const evidMonth = (t) => t.bundle_period || t.period;
+// Under its bundle's header, a receipt dated in another month says so.
+const datedHint = (t) => t.bundle_period && t.period && t.bundle_period !== t.period
+  ? el("div", { class: "muted" }, `Fechado en ${monthLabel(t.period)}`) : null;
+
+function byMonth(rows, periodOf) {
+  const m = new Map();
+  for (const r of rows) { const p = periodOf(r) || "sin mes"; if (!m.has(p)) m.set(p, []); m.get(p).push(r); }
+  return [...m.entries()].sort((a, b) => b[0].localeCompare(a[0]));
+}
+
+// Everything of the open months stays here, linked or not (linked items are marked and go
+// after the free ones), until the month is closed in "Meses".
+function unmatchedSplit() {
+  const openLines = data.all_lines.filter(lineOpen);
+  const lines = openLines.filter(passesNeed);
+  const sel = openLines.find((l) => l.id === selLine) || null;
+  // Matching pairs a line with evidence of its month or the one before.
+  const nearSel = sel ? new Set([sel.period, prevPeriod(sel.period)]) : null;
+  const receipts = data.receipts.filter(evidOpen);
+  const payments = (data.all_movements || []).filter(evidOpen);
+  const evidence = [...(evidKind === "payment" ? [] : receipts), ...(evidKind === "ticket" ? [] : payments)];
+  // Every receipt and payment, of any month (also closed ones), for what is proposed or
+  // linked to the gastos on the left: shown whatever the month filter.
+  const everything = [...(evidKind === "payment" ? [] : data.receipts), ...(evidKind === "ticket" ? [] : (data.all_movements || []))];
+  const linkTo = (t, lid) => (t.linked_to || []).find((x) => x.line_id === lid);
+  const ofSel = sel ? everything.filter((t) => linkTo(t, sel.id)) : [];
+  const available = new Set([...receipts, ...payments, ...everything.filter((t) => t.linked)].map(pickKey));
+  for (const k of [...picked.keys()]) if (!available.has(k)) picked.delete(k); // month closed or gone
+
+  // Updated in place when marking, so the columns keep their scroll position.
+  const summary = el("div", { class: "picksum" });
+  const projBox = el("div", { class: "proj" });
+  const drawPicked = () => {
+    const n = picked.size;
+    summary.hidden = n === 0;
+    projBox.replaceChildren(...(sel && n ? [el("div", { class: "muted" }, "Con los marcados:"), ...projection(sel)] : []));
+    if (!n) return summary.replaceChildren();
+    const total = [...picked.values()].reduce((s, t) => s + (t.total || 0), 0);
+    summary.replaceChildren(
+      el("div", { class: "row", style: "align-items:center" },
+        el("strong", {}, `${n} marcado${n > 1 ? "s" : ""} · ${fmt(total)}`),
+        el("button", { class: "act ok", disabled: !sel, onclick: () => linkPicked(sel) }, sel ? "Vincular marcados al gasto seleccionado" : "Seleccioná un gasto a la izquierda"),
+        el("button", { class: "act", onclick: () => { picked.clear(); document.querySelectorAll(".card.picked").forEach((c) => { c.classList.remove("picked"); c.querySelector("input[type=checkbox]").checked = false; }); drawPicked(); } }, "Desmarcar todo")),
+      ...(sel ? projection(sel) : []));
+  };
+  const months = [...new Set([...openLines.map((l) => l.period), ...receipts.map(evidMonth), ...payments.map((m) => m.period)].filter(Boolean))].sort().reverse();
+  // A month shows what came in that month's bundle (whatever its date) and what is dated in
+  // that month (whatever bundle brought it); lines have no bundle, only their own month.
+  const inMonth = (p, bundle) => splitMonth === "all" || p === splitMonth || (bundle != null && bundle === splitMonth)
+    || (splitMonth === "near" && nearSel && (nearSel.has(p) || nearSel.has(bundle)));
+
+  const month = el("select", { "aria-label": "Mes", onchange: (e) => { splitMonth = e.target.value; render(); } },
+    el("option", { value: "all" }, "Todos los meses"),
+    sel ? el("option", { value: "near" }, `Mes del gasto seleccionado y el anterior`) : null,
+    months.map((p) => el("option", { value: p }, monthLabel(p))));
+  month.value = splitMonth === "near" && !sel ? "all" : splitMonth;
+
+  const lineCardSmall = (l) => el("section", { class: `card compact ${l.id === selLine ? "sel" : ""} ${lineDone(l) && l.id !== selLine ? "done" : ""}` },
+    el("div", { class: "row" }, lineBlock(l),
+      el("button", { class: "act", "aria-pressed": l.id === selLine, onclick: () => { selLine = l.id === selLine ? null : l.id; render(); } },
+        l.id === selLine ? "Seleccionado" : "Seleccionar")),
+    l.receipt.pending || l.payment.pending ? el("div", { class: "muted" }, el("span", { class: "tag pending" }, "Propuesta pendiente"),
+      " Hay un vínculo propuesto para revisar en «Para revisar».") : null,
+    coverageBlock(l),
+    l.id === selLine ? projBox : null,
+    linkPicker(l, l.items.map((i) => `${i.type}:${i.id}`)));
+
+  const evidCard = (t) => {
+    const isPay = t.type === "payment";
+    const side = sel ? sel[isPay ? "payment" : "receipt"] : null;
+    const after = side ? Math.round((side.remaining - t.total) * 100) / 100 : null;
+    const img = firstImage(t, el("div", { class: "noimg" }, "Sin imagen"));
+    const card = el("section", { class: `card compact ${nearSel && (nearSel.has(t.period) || nearSel.has(t.bundle_period)) ? "near" : ""} ${picked.has(pickKey(t)) ? "picked" : ""}` });
+    const box = el("input", { type: "checkbox", checked: picked.has(pickKey(t)), onchange: (e) => {
+      if (e.target.checked) picked.set(pickKey(t), t); else picked.delete(pickKey(t));
+      card.classList.toggle("picked", e.target.checked);
+      drawPicked();
+    } });
+    card.append(
+      el("div", { class: "evid" }, img,
+        el("div", { style: "display:grid; gap:4px; min-width:0" },
+          el("div", {}, el("span", { class: `tag ${isPay ? "bank" : "auto"}` }, isPay ? "Pago bancario" : "Comprobante"), " ",
+            el("span", { class: "muted" }, [t.kind, t.fecha].filter(Boolean).join(" · "))),
+          el("div", {}, el("strong", {}, t.proveedor || "(sin proveedor)"), " ", el("span", { class: "amount" }, fmt(t.total))),
+          t.descripcion ? el("div", { class: "muted clamp" }, t.descripcion) : null,
+          datedHint(t),
+          linkedTag(t),
+          sel ? el("div", { class: "muted" }, !side.needed ? "" : Math.abs(after) <= 0.01 ? "Con este: queda completo"
+            : after > 0 ? `Con este: falta ${fmt(after)}` : `Con este: excede por ${fmt(-after)}`) : null,
+          el("div", { class: "row", style: "align-items:center" },
+            el("label", { class: "inline" }, box, " Marcar"),
+            sel ? selDecision(t, card) : null,
+            el("button", { class: "act", onclick: () => openLinePicker(t) }, "Elegir gasto…")))));
+    return card;
+  };
+
+  // Buttons for the selected gasto: link it, or decide on what is already proposed / linked.
+  const selDecision = (t, card) => {
+    const to = linkTo(t, sel.id);
+    if (!to) return el("button", { class: "act ok", onclick: () => act(linkBody(t, sel.id, "verified")) }, "Vincular al gasto seleccionado");
+    if (to.status === "verified") return el("span", { class: "row", style: "gap:6px; align-items:center" },
+      el("span", { class: "tag verified" }, "Confirmado"),
+      el("button", { class: "act", onclick: () => act(linkBody(t, sel.id, null)) }, "Quitar"));
+    const btns = el("span", { class: "row", style: "gap:6px; align-items:center" },
+      el("button", { class: "act ok", onclick: () => act(linkBody(t, sel.id, "verified")) }, "Confirmar"),
+      el("button", { class: "act bad", onclick: () => {
+        btns.hidden = true;
+        // The other undecided items of the same proposal stay proposed for this gasto.
+        const keep = sel.items.filter((i) => i.type === t.type && i.status === "pending" && i.id !== t.id).map((i) => i.id);
+        const form = rejectForm(t, sel.id, null, () => { form.remove(); btns.hidden = false; }, keep);
+        card.append(form);
+        form.querySelector("select").focus();
+      } }, "Rechazar…"));
+    return btns;
+  };
+
+  const leftLines = lines.filter((l) => inMonth(l.period));
+  const left = byMonth(leftLines, (l) => l.period);
+  // The selected gasto's own items go in their section at the top, not again below.
+  const selKeys = new Set(ofSel.map(pickKey));
+  // Free evidence first in each month, the linked after it (stable: keeps the server order).
+  const right = byMonth(evidence.filter((t) => inMonth(t.period, t.bundle_period) && !selKeys.has(pickKey(t))), evidMonth)
+    .map(([p, ts]) => [p, [...ts].sort((a, b) => a.linked - b.linked)]);
+  // Proposed or linked to a gasto on the left but outside the month filter (or in a closed month).
+  const shown = new Set([...selKeys, ...right.flatMap(([, ts]) => ts.map(pickKey))]);
+  const leftIds = new Set(leftLines.map((l) => l.id));
+  const others = everything.filter((t) => !shown.has(pickKey(t)) && (t.linked_to || []).some((x) => leftIds.has(x.line_id)));
+  const evidBtns = [["all", "Todos"], ["ticket", "Comprobantes"], ["payment", "Pagos bancarios"]].map(([k, label]) =>
+    el("button", { class: "act", "aria-pressed": evidKind === k, onclick: () => { evidKind = k; render(); } }, label));
+
+  drawPicked();
+  return el("div", { style: "display:grid; gap:12px" },
+    monthsBar(),
+    el("div", { class: "row", style: "align-items:center" }, el("label", { class: "inline" }, "Mes ", month),
+      sel ? el("span", { class: "muted" }, "Gasto seleccionado: ", el("strong", {}, sel.concepto), ` · ${monthLabel(sel.period)} · ${fmt(sel.importe)}`) : el("span", { class: "muted" }, "Seleccioná un gasto para vincularle comprobantes o pagos de la derecha.")),
+    el("div", { class: "split" },
+      el("div", { class: "col" },
+        el("div", { class: "colhead" }, el("strong", {}, `Gastos (${lines.length}, ${lines.filter((l) => !lineDone(l)).length} sin cubrir)`), needFilter(openLines)),
+        left.length ? left.flatMap(([p, ls]) => [el("div", { class: "monthhead" }, `${p === "sin mes" ? p : monthLabel(p)} · ${ls.filter(lineDone).length} de ${ls.length} cubiertos`), ...ls.map(lineCardSmall)])
+          : el("div", { class: "empty" }, "Nada con este filtro.")),
+      el("div", { class: "col" },
+        el("div", { class: "colhead" }, el("strong", {}, `Comprobantes y pagos (${evidence.length}, ${evidence.filter((t) => !t.linked).length} sin gasto)`), el("div", { class: "row" }, ...evidBtns), summary),
+        sel ? [el("div", { class: "monthhead" }, `Del gasto seleccionado · ${ofSel.length}`),
+          ...(ofSel.length ? ofSel.map(evidCard) : [el("div", { class: "muted" }, "Nada propuesto ni vinculado todavía.")])] : null,
+        right.length ? right.flatMap(([p, ts]) => [el("div", { class: "monthhead" },
+            `${p === "sin mes" ? p : monthLabel(p)} · ${ts.filter((t) => !t.linked).length} sin gasto de ${ts.length} · ${fmt(ts.reduce((s, t) => s + (t.total || 0), 0))}`), ...ts.map(evidCard)])
+          : el("div", { class: "empty" }, "Nada en este mes."),
+        others.length ? [el("div", { class: "monthhead" }, `De otros meses, propuestos o vinculados a estos gastos · ${others.length}`), ...others.map(evidCard)] : null)));
+}
+
+// A rejected pair: the line, the receipt or payment, and why (editable).
+function rejectionCard(r) {
+  const t = r.item;
+  let editing = false;
+  const box = el("div", {});
+  const draw = () => box.replaceChildren(editing ? rejectForm(t, r.line.id, r.note, () => { editing = false; draw(); }) : noteView(r.note));
+  draw();
+  return el("section", { class: "card" },
+    el("div", { class: "row" }, lineBlock(r.line),
+      el("div", { class: "ticket rejected", style: "flex:1 1 320px; opacity:1" },
+        el("div", {}, el("span", { class: `tag ${t.type === "payment" ? "bank" : "auto"}` }, t.type === "payment" ? "Pago bancario" : "Comprobante"), " ",
+          el("strong", {}, t.proveedor || "(sin proveedor)"), " ", el("span", { class: "amount" }, fmt(t.total))),
+        el("div", { class: "muted" }, [t.kind, t.fecha].filter(Boolean).join(" · ")),
+        t.descripcion ? el("div", { class: "muted clamp" }, t.descripcion) : null,
+        t.privado ? privateCrops(t) : thumbs(t.pages))),
+    box,
+    el("div", { class: "row" },
+      el("button", { class: "act", onclick: () => { editing = true; draw(); } }, r.note ? "Editar motivo" : "Agregar motivo"),
+      el("button", { class: "act", onclick: () => act(linkBody(t, r.line.id, null)) }, "Deshacer rechazo")));
+}
+
+function render() {
+  const openReceipts = data.receipts.filter(evidOpen);
+  const openMovements = (data.all_movements || []).filter(evidOpen);
+  // Counts = what is still to do in the open months.
+  const counts = {
+    pending: byLine(data.groups.filter((g) => g.status === "pending")).length,
+    receipts: openReceipts.filter((t) => !t.verified || !t.linked).length,
+    unmatched: data.all_lines.filter(lineOpen).filter((l) => !lineDone(l)).length,
+    movements: openMovements.filter((m) => !m.linked).length,
+    rejected: (data.rejections || []).length,
+    auto: byLine(data.groups).filter((gs) => gs.every((g) => g.status !== "pending")).length,
+  };
+  const nav = document.getElementById("tabs");
+  nav.replaceChildren(...TABS.map(([k, label]) => el("button", { "aria-pressed": tab === k, onclick: () => { tab = k; history.replaceState(null, "", `#${k}`); render(); } }, `${label} (${counts[k]})`)));
+  const main = document.getElementById("main");
+  let items = [];
+  // A line with a proposal waiting shows all its links (also the confirmed ones) under "Para revisar".
+  const lineGroups = byLine(data.groups);
+  if (tab === "pending") items = lineGroups.filter((gs) => gs.some((g) => g.status === "pending")).map(lineCard);
+  if (tab === "auto") {
+    const done = lineGroups.filter((gs) => gs.every((g) => g.status !== "pending"));
+    items = [needFilter(done.map((gs) => gs[0].line)), ...done.filter((gs) => passesNeed(gs[0].line)).map(lineCard)];
+  }
+  const monthGroups = (rows, card) => byMonth(rows, evidMonth)
+    .flatMap(([p, ts]) => [el("div", { class: "monthhead" }, `${p === "sin mes" ? p : monthLabel(p)} · ${ts.length}`), ...ts.map(card)]);
+  if (tab === "receipts") {
+    const pass = { all: () => true, unlinked: (t) => !t.linked, unverified: (t) => !t.verified };
+    const rows = openReceipts.filter(pass[receiptFilter] || pass.all).filter(receiptMatches);
+    items = [monthsBar(),
+      el("div", { class: "row", style: "align-items:center; gap:8px" }, receiptSearch,
+        receiptText.trim() ? el("span", { class: "muted" }, `${rows.length} coinciden`) : null),
+      filterBtns([["all", "Todos", openReceipts.length], ["unlinked", "Sin gasto", openReceipts.filter(pass.unlinked).length],
+        ["unverified", "Sin verificar", openReceipts.filter(pass.unverified).length]], receiptFilter, (k) => { receiptFilter = k; }),
+      ...monthGroups(rows, (t) => receiptCard(t, { linkable: true }))];
+  }
+  if (tab === "rejected") items = (data.rejections || []).map(rejectionCard);
+  if (tab === "movements") {
+    const rows = openMovements.filter((m) => movementFilter === "all" || !m.linked);
+    items = [monthsBar(),
+      filterBtns([["all", "Todos", openMovements.length], ["unlinked", "Sin gasto", openMovements.filter((m) => !m.linked).length]],
+        movementFilter, (k) => { movementFilter = k; }),
+      ...monthGroups(rows, movementCard)];
+  }
+  main.classList.toggle("wide", tab === "unmatched");
+  if (tab === "unmatched") {
+    const scroll = [...main.querySelectorAll(".col")].map((c) => c.scrollTop);
+    main.replaceChildren(unmatchedSplit());
+    main.querySelectorAll(".col").forEach((c, i) => { c.scrollTop = scroll[i] || 0; });
+    return;
+  }
+  if (items.length === 1 && tab === "auto") items.push(el("div", { class: "empty" }, "Nada con este filtro."));
+  if ((tab === "receipts" && items.length === 3) || (tab === "movements" && items.length === 2)) items.push(el("div", { class: "empty" }, "Nada en los meses abiertos con este filtro."));
+  main.replaceChildren(...(items.length ? items : [el("div", { class: "empty" }, "Nada pendiente acá.")]));
+}
+
+window.addEventListener("beforeunload", (e) => { if (Object.keys(drafts).length) e.preventDefault(); });
+load();
+</script>
+</body>
+</html>

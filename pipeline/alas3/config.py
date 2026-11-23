@@ -25,8 +25,19 @@ KIND_MAP = {
 }
 
 # Document kinds processed and published in the current phase (PLAN.md §10).
-# Phase 2 adds "comprobantes", Phase 3 "acta". Anything else is never published.
-PHASE_KINDS = ("reglamento", "liquidacion")
+# Phase 3 adds "acta". Anything else is never published.
+PHASE_KINDS = ("reglamento", "liquidacion", "comprobantes")
+
+# The consortium's ejercicio runs September to August (the administrator's yearly balances,
+# data/inbox/balances/). NB: the Reglamento de Copropiedad, art. 15, says January–December.
+EJERCICIO_START_MONTH = 9
+
+
+def ejercicio(period: str) -> str:
+    """First month of the ejercicio a "YYYY-MM" month belongs to: 2026-03 -> "2025-09"."""
+    y, m = map(int, period.split("-"))
+    return f"{y if m >= EJERCICIO_START_MONTH else y - 1}-{EJERCICIO_START_MONTH:02d}"
+
 
 RENDER_DPI = 150
 WEBP_QUALITY = 70

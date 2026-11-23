@@ -52,6 +52,17 @@ beforeEach(async () => {
       ('page', 10, 10, 'Reglamento p.1', 'Artículo 1 Del uso de las cocheras'),
       ('page', 21, 21, 'Liquidación p.2', 'Recibo de haberes cocheras'),
       ('article', 1, 10, 'Artículo 1', 'Del uso de las cocheras');
+    INSERT INTO documents (id, kind, period, title, r2_key_pdf, sha256, pages)
+      VALUES (3, 'comprobantes', '2026-10', 'Comprobantes oct 2026', 'docs/c.pdf', 'h3', 2);
+    INSERT INTO pages (id, document_id, page_no, r2_key_img, text, restricted)
+      VALUES (30, 3, 1, 'img/30.webp', 'Factura', 0), (31, 3, 2, 'img/31.webp', 'Recibo de haberes', 1);
+    INSERT INTO tickets (id, document_id, page_id, page_ids_json, kind, fecha, proveedor, total, period_id, source, verified)
+      VALUES (100, 3, 30, '[30]', 'factura', '2026-10-05', 'Pinturas SA', 1000, '2026-10', 'qr', 1),
+             (101, 3, 31, '[31, 30]', 'ticket', '2026-10-06', 'Taxi', 500, '2026-10', 'llm', 0);
+    INSERT INTO expense_ticket_links VALUES (1, 100, 1.0, 'verified'), (2, 101, 0.75, 'auto'), (3, 100, 0.2, 'rejected');
+    INSERT INTO tags (id, name) VALUES (1, 'movilidad/taxi');
+    INSERT INTO entity_tags VALUES ('ticket', 101, 1);
+    UPDATE periods SET ingresos = 3500, egresos = 3000, saldo_inicial = 100, saldo_final = 600 WHERE id = '2026-10';
   `);
   env = {
     DB: db.d1,
@@ -63,7 +74,8 @@ beforeEach(async () => {
 
 describe("access gate", () => {
   it("denies API, files and the SPA without a cookie", async () => {
-    for (const p of ["/api/expenses", "/api/files/page/10", "/api/files/doc/1"]) {
+    for (const p of ["/api/expenses", "/api/files/page/10", "/api/files/doc/1", "/api/tickets", "/api/tickets/100",
+                     "/api/stats/monthly", "/api/stats/rubros", "/api/stats/proveedores", "/api/analyses/taxis-encargado", "/api/observations"]) {
       const res = await call(p);
       expect(res.status, p).toBe(401);
       expect(await res.text()).not.toContain("IMG10");
@@ -184,6 +196,13 @@ describe("api", () => {
     expect(body.rows[0]).not.toHaveProperty("cuit");
   });
 
+  it("accepts several values per filter (repeated params)", async () => {
+    expect((await get("/api/expenses?rubro=Mantenimiento&rubro=Sueldos")).body.count).toBe(3);
+    expect((await get("/api/expenses?rubro=Mantenimiento&rubro=Nada")).body.count).toBe(2);
+    expect((await get("/api/expenses?period=2026-10&period=2026-09&rubro=Sueldos")).body.total).toBe(1500);
+    expect((await get("/api/expenses?period=2026-09")).body.count).toBe(0);
+  });
+
   it("hides restricted page ids in expense lists and detail", async () => {
     const rows = (await get("/api/expenses?rubro=Sueldos")).body.rows;
     expect(rows[0].page_id).toBeNull();
@@ -242,6 +261,128 @@ describe("api", () => {
       expect((await get(`/api/search?q=${encodeURIComponent(q)}`)).status).toBe(200);
     }
   });
+
+  it("lists receipts and never exposes a restricted page", async () => {
+    const { body } = await get("/api/tickets");
+    expect(body.count).toBe(2);
+    const taxi = body.rows.find((r: any) => r.id === 101);
+    expect(taxi.page_id).toBeNull(); // its first page is a payroll slip
+    expect(taxi.linked).toBe(1);
+    const detail = (await get("/api/tickets/101")).body;
+    expect(detail.pages.map((p: any) => p.id)).toEqual([30]);
+    expect(detail.lines.map((l: any) => l.id)).toEqual([2]);
+    expect((await get("/api/tickets?linked=0")).body.count).toBe(0);
+    expect((await get("/api/tickets?kind=ticket")).body.count).toBe(1);
+    expect((await get("/api/tickets?kind=bogus")).body.count).toBe(2);
+  });
+
+  it("shows linked receipts on an expense and filters lines without one", async () => {
+    const e1 = (await get("/api/expenses/1")).body;
+    expect(e1.tickets.map((t: any) => [t.id, t.status])).toEqual([[100, "verified"]]);
+    expect((await get("/api/expenses/3")).body.tickets).toEqual([]); // the rejected link is not shown
+    const sin = (await get("/api/expenses?sin_comprobante=1")).body;
+    // Line 2 only has a "posible coincidencia" (score 0.75): not counted as having a receipt.
+    expect(sin.rows.map((r: any) => r.id).sort()).toEqual([2, 3]);
+  });
+
+  it("shows bank payments on an expense and requires receipt and payment once a statement exists", async () => {
+    raw.exec(`
+      INSERT INTO bank_movements (id, document_id, page_id, page_ids_json, period_id, fecha, banco, descripcion, importe, kind, items_json)
+        VALUES (500, 3, 30, '[30, 31]', '2026-10', '2026-10-31', 'Banco X', 'Gastos bancarios oct 2026', 1500, 'gastos',
+                '[{"descripcion":"I.V.A.","importe":1500,"cantidad":3}]'),
+               (501, 3, 31, '[31]', '2026-10', '2026-10-09', 'Banco X', 'TRANSF. REMIS', 500, 'debito', '[]'),
+               (502, 3, 30, '[30]', '2026-10', '2026-10-07', 'Banco X', 'TRANSF. PINTURAS SA', 1000, 'debito', '[]');
+      INSERT INTO expense_payment_links VALUES (3, 500, 1.0, 'verified'), (2, 501, 0.6, 'rejected');
+    `);
+    const e3 = (await get("/api/expenses/3")).body;
+    expect(e3.payments).toHaveLength(1);
+    expect(e3.payments[0]).toMatchObject({ id: 500, kind: "gastos", status: "verified", items: [{ descripcion: "I.V.A.", cantidad: 3 }] });
+    expect(e3.payments[0].pages.map((p: any) => p.id)).toEqual([30]); // the restricted page is dropped
+    expect((await get("/api/expenses/2")).body.payments).toEqual([]); // rejected: not shown
+    // October has receipts and a bank statement: every line needs both. Line 1 has only its
+    // receipt; line 3 is backed by the grouped bank charges alone (the statement is their voucher).
+    let sin = (await get("/api/expenses?sin_comprobante=1")).body;
+    expect(sin.rows.map((r: any) => r.id).sort()).toEqual([1, 2]);
+    const rows = (await get("/api/expenses?period=2026-10")).body.rows;
+    const flags = (id: number) => { const r = rows.find((x: any) => x.id === id); return [r.falta_comprobante, r.falta_pago]; };
+    expect([flags(1), flags(2), flags(3)]).toEqual([[0, 1], [1, 1], [0, 0]]);
+    expect(rows.find((r: any) => r.id === 3).pagos).toBe(1);
+
+    raw.exec("INSERT INTO expense_payment_links VALUES (1, 502, 1.0, 'auto');");
+    sin = (await get("/api/expenses?sin_comprobante=1")).body;
+    expect(sin.rows.map((r: any) => r.id)).toEqual([2]);
+    const [m] = (await get("/api/stats/monthly")).body;
+    expect(m).toMatchObject({ con_comprobante: 2500, lineas_sin_comprobante: 1 });
+    const analysis = (await get("/api/analyses/sin-comprobante")).body.items;
+    expect(analysis.map((i: any) => [i.id, i.falta_comprobante, i.falta_pago])).toEqual([[2, 1, 1]]);
+  });
+
+  it("shows a cheque on its expense; one not cleared yet is not a bank statement", async () => {
+    raw.exec(`
+      INSERT INTO bank_movements (id, document_id, page_id, page_ids_json, period_id, fecha, banco, comprobante, descripcion, importe, kind,
+                                  items_json, cheque_numero, cheque_fecha_pago)
+        VALUES (600, 3, 30, '[30]', '2026-10', '2026-10-31', 'Banco X', '9971847', 'CHEQUE CAMARA RECIBIDA', 1000, 'debito', '[]',
+                '09971847', '2026-10-30'),
+               (601, 3, 30, '[30]', '2026-11', '2026-11-30', 'Banco X', '09971848', 'Cheque de pago diferido N° 09971848', 500, 'cheque', '[]',
+                '09971848', '2026-11-30');
+      INSERT INTO expense_payment_links VALUES (1, 600, 1.0, 'verified');
+    `);
+    const p = (await get("/api/expenses/1")).body.payments[0];
+    expect(p).toMatchObject({ id: 600, kind: "debito", cheque_numero: "09971847", cheque_fecha_pago: "2026-10-30" });
+    // October has a statement (movement 600); the pending cheque does not make November one.
+    const body = (await get("/api/analyses/movimientos-sin-gasto")).body;
+    expect(body.items.map((i: any) => [i.id, i.kind])).toEqual([[601, "cheque"]]);
+    expect(body.periods.map((x: any) => x.id)).toEqual(["2026-10"]);
+  });
+
+  it("lists bank movements not linked to any expense", async () => {
+    raw.exec(`
+      INSERT INTO bank_movements (id, document_id, page_id, page_ids_json, period_id, fecha, banco, descripcion, importe, kind, items_json)
+        VALUES (500, 3, 30, '[30]', '2026-10', '2026-10-31', 'Banco X', 'Gastos bancarios oct 2026', 1500, 'gastos',
+                '[{"descripcion":"IMPUESTO LEY 25413","importe":1500,"cantidad":9}]'),
+               (501, 3, 31, '[31]', '2026-10', '2026-10-09', 'Banco X', 'TRANSF. REMIS', 500, 'debito', '[]'),
+               (502, 3, 30, '[30]', '2026-10', '2026-10-07', 'Banco X', 'TRANSF. PINTURAS SA', 1000, 'debito', '[]');
+      INSERT INTO expense_payment_links VALUES (1, 502, 1.0, 'verified'), (2, 501, 0.6, 'rejected');
+    `);
+    const body = (await get("/api/analyses/movimientos-sin-gasto")).body;
+    expect(body.items.map((i: any) => i.id)).toEqual([500, 501]); // newest first; a rejected link does not count
+    expect(body.items[0]).toMatchObject({ kind: "gastos", items: [{ descripcion: "IMPUESTO LEY 25413", cantidad: 9 }] });
+    expect(body.items[0]).not.toHaveProperty("items_json");
+    expect(body.items[1].page_id).toBeNull(); // page 31 is restricted
+    expect(body.periods).toEqual([{ id: "2026-10", total: 3000, vinculado: 1000 }]);
+  });
+
+  it("aggregates the dashboard and saved analyses", async () => {
+    const [m] = (await get("/api/stats/monthly")).body;
+    expect(m).toMatchObject({ id: "2026-10", gastos: 3000, ingresos: 3500, receipts: 2, con_comprobante: 1000, lineas_sin_comprobante: 2 });
+    const taxis = (await get("/api/analyses/taxis-encargado")).body.items;
+    expect(taxis.map((t: any) => [t.id, t.page_id])).toEqual([[101, null]]);
+    const sin = (await get("/api/analyses/sin-comprobante")).body;
+    expect(sin.items.map((i: any) => i.id)).toEqual([3, 2]);
+    expect((await get("/api/analyses/nope")).status).toBe(404);
+    // Inherited object keys must not resolve to a handler (Object(env) leaked SESSION_SECRET).
+    for (const slug of ["constructor", "__proto__", "toString", "hasOwnProperty", "valueOf"]) {
+      const res = await get(`/api/analyses/${slug}`);
+      expect(res.status, slug).toBe(404);
+      expect(JSON.stringify(res.body)).not.toContain(SECRET);
+    }
+  });
+
+  it("lists observations with their published references only", async () => {
+    raw.exec(`
+      INSERT INTO observations (id, period_id, tipo, titulo, detalle, importe, estado, fecha, line_ids_json, ticket_ids_json, movement_ids_json)
+        VALUES ('2026-10-01', '2026-10', 'posible doble cobro', 'Taxi cobrado dos veces', 'detalle', 500, 'abierta', '2026-11-21', '[2, 999]', '[101, 777]', '[]'),
+               ('2026-09-01', '2026-09', 'sin comprobante', 'Falta factura', 'detalle', NULL, 'resuelta', '2026-11-21', '[]', '[]', '[]');
+    `);
+    const { body } = await get("/api/observations");
+    expect(body.map((o: any) => o.id)).toEqual(["2026-10-01", "2026-09-01"]);
+    expect(body[0].lines.map((l: any) => l.id)).toEqual([2]); // 999 does not exist: not shown
+    expect(body[0].tickets.map((t: any) => t.id)).toEqual([101]);
+    expect(body[0].movements).toEqual([]);
+    expect((await get("/api/observations?estado=resuelta")).body.map((o: any) => o.id)).toEqual(["2026-09-01"]);
+    expect((await get("/api/observations?estado=bogus")).body).toHaveLength(2);
+    expect((await get("/api/observations?period=2026-10")).body.map((o: any) => o.id)).toEqual(["2026-10-01"]);
+  });
 });
 
 describe("toFtsQuery", () => {
@@ -249,4 +390,5 @@ describe("toFtsQuery", () => {
     expect(toFtsQuery('pintura "palier')).toBe('"pintura" "palier"*');
     expect(toFtsQuery("  ")).toBeNull();
   });
+
 });

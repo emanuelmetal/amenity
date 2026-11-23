@@ -33,10 +33,17 @@ subcategorias:
   - name: Administración central del complejo
     keywords: [administracion central]
   - name: Honorarios y gastos administrativos
-    keywords: [honorarios, fotocopias, sistema web, autogestion]
+    keywords: [honorarios, fotocopias, sistema web, autogestion, libreria, papeleria, calendario]
+  - name: Combustible
+    keywords: [combustible, diesel, gasoil, nafta]
+  - name: Ropa de trabajo
+    tags: [encargado]
+    keywords: [ropa de trabajo]
   - name: Gastos bancarios
     keywords: [bancarios, comision bancaria, ley 25413]
   - name: Obras y mantenimiento
-    keywords: [mano de obra, membrana, impermeabilizacion, caños, plomero, cerrajero, reparacion, mantenimiento, ferreteria, pulsador, mechas]
+    keywords: [mano de obra, membrana, impermeabilizacion, caños, plomero, cerrajero, cerrajeria, reparacion, mantenimiento,
+               ferreteria, pulsador, mechas, cadena, grupo electrogeno, portero electrico, contenedor, matafuegos,
+               compra de material]
   - name: Seguros
     keywords: [seguro, poliza]

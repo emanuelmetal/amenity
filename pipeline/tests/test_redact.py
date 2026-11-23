@@ -1,4 +1,4 @@
-from alas3.redact import MASK, redact_text, restriction_reason
+from alas3.redact import MASK, redact_text, restriction_reason, sensitive_strings
 
 
 def test_person_cuil_masked_company_cuit_kept():
@@ -10,6 +10,19 @@ def test_person_cuil_masked_company_cuit_kept():
 
 def test_cuil_without_dashes_masked():
     assert "27123456784" not in redact_text("cuil 27123456784")
+
+
+def test_dni_written_after_a_cuit_label():
+    assert "16408564" not in redact_text("Provincia: CORDOBA  C.U.I.T.: 16408564")
+    assert redact_text("CUIT: 30-66056173-7") == "CUIT: 30-66056173-7"  # a company CUIT stays
+    assert "16408564" in "".join(sensitive_strings("C.U.I.T.: 16408564"))
+    assert "27654555" not in redact_text("D.N.l. :27654555")  # OCR read the I as an l
+    assert "16408564" not in redact_text("Sr./es:  PEREZ JUAN  D0000016408564  Asociado: 1")
+
+
+def test_personal_insurance_policy_is_restricted():
+    page = "Accidentes Personales\nCertif.  Asegurado / Domicilio  Coberturas\n1 (Alta) GOMEZ ANA (12345678) / CALLE 1"
+    assert restriction_reason(page) == "personal"
 
 
 def test_dni_labeled_and_dotted():
@@ -32,6 +45,16 @@ def test_cbu_masked():
 def test_restriction_reasons():
     assert restriction_reason("RECIBO DE HABERES - Ley 20744") == "payroll"
     assert restriction_reason("Formulario F.931 AFIP") == "payroll"
+    # A vacation-month slip has no "sueldo básico" line.
+    slip = "24  VACACIONES ANUALES  68036.84\nNeto a Cobr.\n1616.895.40\nFirma del Empleado"
+    assert restriction_reason(slip) == "payroll"
+    # The administrator's newer payslip layout.
+    assert (
+        restriction_reason(
+            "Detalle de la composición salarial\nSueldo Neto - 80.1%\nEmpleador  Firma Empleado"
+        )
+        == "payroll"
+    )
     assert restriction_reason("Listado de morosos al 30/09") == "debtors"
     assert restriction_reason("Rubro 1 Sueldos y cargas sociales   1.000,00") is None
 
@@ -124,3 +147,22 @@ def test_review_identifier_forms():
         assert "12345678" not in redact_text(t), t
     assert "12345678" not in redact_text("CUIL 21-12345678-9")  # labelled CUIL: any prefix
     assert redact_text("CUIT 30-71234567-9") == "CUIT 30-71234567-9"  # companies stay
+
+
+def test_barcode_number_starting_with_a_person_cuit_is_masked():
+    """The digits under an old AFIP barcode start with the issuer's CUIT (invented here)."""
+    from alas3.redact import redact_text, sensitive_strings
+
+    run = "2011111111206000123456789012345202601015"
+    assert redact_text(f"CAE {run}") == "CAE [oculto]"
+    assert run in sensitive_strings(f"x {run} y")
+    company = "3011111111206000123456789012345202601015"
+    assert redact_text(company) == company  # companies' barcodes stay
+
+
+def test_utility_payment_barcode_is_not_mistaken_for_a_cuit():
+    from alas3.redact import redact_text, valid_cuit
+
+    run = "2400000000106000123456789012345202601015"  # starts with 24, but no valid CUIT check digit
+    assert not valid_cuit(run[:11])
+    assert redact_text(run) == run

@@ -100,13 +100,30 @@ def test_manual_overrides(data_dir, monkeypatch):
     assert [p.restricted_reason for p in m.pages] == [None, "manual"]
 
 
+def test_full_override_publishes_a_page_unredacted(data_dir, monkeypatch):
+    from alas3 import ingest, ocr
+
+    monkeypatch.setattr(ocr, "ocr_document", lambda *_: None)
+    text = f"ARTICULO 1: el titular CUIL {CUIL} declara lo siguiente"
+    pdf = make_pdf(data_dir / "inbox/reglamento/r.pdf", [[text], [text], [text]])
+    sha16 = ingest.sha256_file(pdf)[:16]
+    (data_dir / "work").mkdir(exist_ok=True)
+    # Page 2: the owner decided to publish it as sent; page 3: restrict wins over full.
+    (data_dir / "work/restrict.json").write_text(json.dumps({sha16: {"full": [2, 3], "restrict": [3]}}))
+    [m] = ingest.ingest_all()
+    p1, p2, p3 = m.pages
+    assert CUIL not in p1.text and p1.redacted_strings == 1  # the automatic masking, as always
+    assert CUIL in p2.text and not p2.restricted and p2.redacted_strings == 0
+    assert p3.restricted_reason == "manual"
+    with pymupdf.open(ingest.doc_dir(m) / "public.pdf") as pub:
+        assert CUIL not in pub[0].get_text() and CUIL in pub[1].get_text()  # no blackout on page 2
+
+
 def test_only_phase_kinds_are_ingested_and_published(data_dir):
     from alas3 import ingest, publish
 
     make_pdf(data_dir / "inbox/039_20250922102519_Circulares Varias.pdf", [["Circular con datos de vecinos"]])
-    make_pdf(
-        data_dir / "inbox/Comprobantes_proveedores_202601.pdf", [["Factura B 0001-00001234 total 1.000,00"]]
-    )
+    make_pdf(data_dir / "inbox/acta_2026-09-15.pdf", [["Acta de la comision"]])  # Phase 3
     assert ingest.ingest_all() == []
     assert "Circular" not in publish.build_sql(ingest.load_manifests())
 
@@ -358,3 +375,46 @@ def test_publish_sweeps_documents_no_longer_published(data_dir):
     assert db.execute("SELECT COUNT(*) FROM documents WHERE id = 99").fetchone()[0] == 0
     assert db.execute("SELECT COUNT(*) FROM pages WHERE document_id = 99").fetchone()[0] == 0
     assert db.execute("SELECT COUNT(*) FROM reglamento_articles WHERE document_id IS NULL").fetchone()[0] == 0
+
+
+def test_expense_line_ids_are_stable_and_links_survive_republish(data_dir):
+    """Phase 2: re-ingesting keeps line ids, so review decisions about them still apply."""
+    from alas3 import ingest, publish
+    from alas3.ids import expense_line_ids
+    from alas3.schemas import Liquidacion, LiquidacionLine
+
+    liq = Liquidacion(
+        period="2026-10",
+        lines=[
+            LiquidacionLine(rubro="R", concepto="Taxi", importe=10.0),
+            LiquidacionLine(rubro="R", concepto="Taxi", importe=10.0),  # identical line, distinct id
+        ],
+    )
+    a, b = expense_line_ids(liq)
+    assert a != b and expense_line_ids(liq) == [a, b]
+
+    make_pdf(
+        data_dir / "inbox/liquidaciones/liq_2026-10.pdf",
+        [
+            [
+                "RUBRO 1 - MANTENIMIENTO",
+                ("Pintura", "100,00"),
+                "TOTAL RUBRO 1  100,00",
+                "TOTAL GASTOS DEL MES  100,00",
+            ]
+        ],
+    )
+    from alas3 import cli
+
+    cli.main(["ingest"])
+    db = migrated_db()
+    sql = publish.build_sql(ingest.load_manifests())
+    db.executescript(sql)
+    (lid,) = db.execute("SELECT id FROM expense_lines").fetchone()
+    cli.main(["ingest", "--force"])  # re-extract from scratch: same line, same id
+    db.executescript(publish.build_sql(ingest.load_manifests()))
+    assert db.execute("SELECT id FROM expense_lines").fetchall() == [(lid,)]
+    from alas3.schemas import ReviewState
+
+    db.executescript(publish.build_sql(ingest.load_manifests(), ReviewState(lines_verified=[lid])))
+    assert db.execute("SELECT verified FROM expense_lines WHERE id = ?", (lid,)).fetchone() == (1,)
