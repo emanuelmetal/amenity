@@ -23,9 +23,10 @@ export function formatPeriod(p: string | null | undefined): string {
 /** Chart axes: `$4,5 M`, `$850 mil`. */
 export function formatMoneyShort(n: number): string {
   const a = Math.abs(n);
-  if (a >= 1e6) return `$${(n / 1e6).toLocaleString("es-AR", { maximumFractionDigits: 1 })} M`;
-  if (a >= 1e3) return `$${Math.round(n / 1e3).toLocaleString("es-AR")} mil`;
-  return `$${Math.round(n).toLocaleString("es-AR")}`;
+  const sign = n < 0 ? "−" : "";
+  if (a >= 1e6) return `${sign}$${(a / 1e6).toLocaleString("es-AR", { maximumFractionDigits: 1 })} M`;
+  if (a >= 1e3) return `${sign}$${Math.round(a / 1e3).toLocaleString("es-AR")} mil`;
+  return `${sign}$${Math.round(a).toLocaleString("es-AR")}`;
 }
 
 /** `2026-10` → `oct 26` (chart axes). */

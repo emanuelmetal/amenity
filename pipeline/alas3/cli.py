@@ -199,6 +199,13 @@ def cmd_link(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_ipc(args: argparse.Namespace) -> int:
+    from . import ipc
+
+    ipc.update()
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
     p = argparse.ArgumentParser(prog="alas3")
     sub = p.add_subparsers(dest="cmd", required=True)
@@ -229,6 +236,9 @@ def main(argv: list[str] | None = None) -> int:
     s = sub.add_parser("ejercicio", help="year-close check: balance + evidence of one ejercicio (Sep–Aug)")
     s.add_argument("--desde", help="first month of the ejercicio, e.g. 2025-09 (default: latest balance)")
     s.set_defaults(fn=cmd_ejercicio)
+
+    s = sub.add_parser("ipc", help="refresh INDEC's IPC series for the asamblea page (web/src/lib/ipc.ts)")
+    s.set_defaults(fn=cmd_ipc)
 
     s = sub.add_parser("publish", help="upload to D1 + R2")
     s.add_argument("--local", action="store_true", help="target local wrangler state instead of Cloudflare")

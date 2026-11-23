@@ -1,6 +1,6 @@
 # Torre 3 portal. See CLAUDE.md. LOCAL=1 targets local wrangler state.
 .PHONY: setup migrate migrate-local seed-local ingest validate review match observations ejercicio publish publish-local build dev deploy \
-        new-link rotate-link admin-link unit-link revoke-link list-links backup review-notes test test-py test-web monthly
+        new-link rotate-link admin-link unit-link revoke-link list-links backup review-notes test test-py test-web monthly ipc
 
 PY := cd pipeline && uv run alas3
 LOCALFLAG := $(if $(LOCAL),--local,)
@@ -54,7 +54,8 @@ monthly:
 	@echo "  2. make review   -> confirm links, payments and actas (127.0.0.1)"
 	@echo "  3. Log findings in data/work/observations.json; make observations ARGS=--draft for the administrator"
 	@echo "  4. After August: make ejercicio when the yearly balance arrives"
-	@echo "  5. make publish-local, check with make dev; then make publish and make backup"
+	@echo "  5. After INDEC publishes the month's IPC (~13th): make ipc (Informe para la asamblea)"
+	@echo "  6. make publish-local, check with make dev; then make publish and make backup"
 
 build:
 	cd web && pnpm build
@@ -76,6 +77,9 @@ revoke-link:
 list-links:
 	$(PY) link list $(LOCALFLAG)
 
+ipc:
+	$(PY) ipc
+
 backup:
 	mkdir -p data/backups
 	$(WR) d1 export torre3 --remote $(foreach t,$(BACKUP_TABLES),--table $(t)) --output ../data/backups/d1-$$(date +%Y%m%d).sql
@@ -84,7 +88,7 @@ backup:
 # d1 export refuses databases with virtual tables unless they are left out; search_fts is rebuilt from these.
 BACKUP_TABLES := documents pages periods expense_lines tickets ticket_items expense_ticket_links tags \
                  entity_tags reglamento_articles actas acta_items acta_expense_links access_codes comments \
-                 comment_reports comment_moderation observations
+                 comment_reports comment_moderation observations obras obra_expense_links
 
 test: test-py test-web
 test-py:

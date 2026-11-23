@@ -88,3 +88,8 @@ def acta_id(acta) -> int:
 def acta_item_ids(acta) -> list[int]:
     """Position within the acta: rewording an item keeps its id."""
     return [stable_id("acta_item", acta.key, i) for i in range(len(acta.items))]
+
+
+def obra_id(obra) -> int:
+    """By name: renaming an obra changes its id (nothing references it but the page)."""
+    return stable_id("obra", obra.nombre)

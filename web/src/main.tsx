@@ -6,6 +6,7 @@ import { AppShell } from "./components/AppShell";
 import { Empty } from "./components/ui";
 import Actas from "./pages/Actas";
 import Analisis from "./pages/Analisis";
+import Asamblea from "./pages/Asamblea";
 import Buscar from "./pages/Buscar";
 import Comprobantes from "./pages/Comprobantes";
 import Comentarios from "./pages/Comentarios";
@@ -31,6 +32,7 @@ const router = createBrowserRouter([
       { path: "/comprobantes", element: <Comprobantes /> },
       { path: "/analisis", element: <Analisis /> },
       { path: "/observaciones", element: <Observaciones /> },
+      { path: "/asamblea", element: <Asamblea /> },
       { path: "/reglamento", element: <Reglamento /> },
       { path: "/reglamento/:id", element: <Reglamento /> },
       { path: "/actas", element: <Actas /> },

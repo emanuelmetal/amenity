@@ -112,6 +112,26 @@ def test_book_validation():
         ActaBook.model_validate({"folios": {"photo.jpeg": folio}})
 
 
+def test_obra_validation():
+    from alas3.schemas import ActaBook, Obra
+
+    assert Obra(nombre="A", aprobado=1000).total_aprobado == 1000
+    assert Obra(nombre="A", cuota_por_unidad=10, cuotas=3).total_aprobado == 10 * 3 * 64
+    assert Obra(nombre="A").total_aprobado is None and Obra(nombre="A").criterio is None
+    with pytest.raises(ValidationError):  # both ways of stating the amount
+        Obra(nombre="A", aprobado=1, cuota_por_unidad=1, cuotas=1)
+    with pytest.raises(ValidationError):  # cuota without the number of cuotas
+        Obra(nombre="A", cuota_por_unidad=1)
+    folio = {"folio": 1, "texto": "x"}
+    acta = {"numero": 1, "fecha": "2025-11-27", "folios": ["0123456789abcdef"], "resumen": "r"}
+    base = {"folios": {"0123456789abcdef": folio}, "actas": [acta]}
+    ActaBook.model_validate({**base, "obras": [{"nombre": "A", "actas": ["1"]}]})
+    with pytest.raises(ValidationError):  # unknown acta
+        ActaBook.model_validate({**base, "obras": [{"nombre": "A", "actas": ["7"]}]})
+    with pytest.raises(ValidationError):  # duplicated obra
+        ActaBook.model_validate({**base, "obras": [{"nombre": "A"}, {"nombre": "A"}]})
+
+
 def test_publish_actas_links_and_leaves_comments_alone(data_dir):
     from alas3 import extract, ids, ingest, publish
     from alas3.schemas import ReviewState
@@ -134,6 +154,10 @@ def test_publish_actas_links_and_leaves_comments_alone(data_dir):
              "items": [{"tipo": "decision", "texto": "Contratar la limpieza", "importe": 90000,
                         "gastos": [lines[0], 999]}]},
             {"numero": 102, "fecha": "2026-03-02", "folios": [sb], "resumen": "Obra de terrazas"},
+        ],
+        "obras": [
+            {"nombre": "Terrazas", "cuota_por_unidad": 50000, "cuotas": 2, "actas": ["102"],
+             "gastos": [lines[0], 999], "observaciones": ["2026-01-01"], "detalle": "El administrador cobró dos cuotas."},
         ],
     }
     write_book(data_dir, book)
@@ -158,6 +182,16 @@ def test_publish_actas_links_and_leaves_comments_alone(data_dir):
     assert [r[0] for r in db.execute("SELECT expense_line_id FROM acta_expense_links")] == [lines[0]]
     assert db.execute("SELECT count(*) FROM comments").fetchone()[0] == 1
     assert "comments" not in sql
+    obra = db.execute("SELECT * FROM obras").fetchone()
+    assert obra["id"] == ids.stable_id("obra", "Terrazas")
+    assert obra["aprobado"] == 50000 * 2 * 64
+    assert obra["criterio"] == "$ 50.000 por unidad × 64 unidades × 2 cuotas"
+    assert json.loads(obra["acta_ids_json"]) == [rows[102]["id"]]
+    assert json.loads(obra["observation_ids_json"]) == ["2026-01-01"]
+    assert [r[0] for r in db.execute("SELECT expense_line_id FROM obra_expense_links")] == [lines[0]]  # 999 dropped
+    # republishing replaces them in full
+    db.executescript(sql)
+    assert db.execute("SELECT count(*) FROM obras").fetchone()[0] == 1
     # the untranscribed photo's page is restricted and not searchable; the acta is
     assert db.execute("SELECT restricted FROM pages WHERE id = ?", (photos[sc].page_id(1),)).fetchone()[0] == 1
     hits = db.execute("SELECT entity_type FROM search_fts WHERE search_fts MATCH 'sobres'").fetchall()
