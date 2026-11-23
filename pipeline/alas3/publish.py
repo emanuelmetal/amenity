@@ -426,9 +426,6 @@ def publish(local: bool) -> None:
         build_sql(manifests, sync_cheque_decisions(collect_movements(manifests)[1]), load_observations())
     )
     wrangler.d1_file(sql_path, local)
-    from .ask_sync import sync
-
-    sync(local)  # "Preguntale al portal" reads only this copy of the ask_* views
 
     # 3. everything uploaded before that is no longer published (restricted pages, dropped documents)
     to_delete = sorted(k for k in state if k not in expected)
@@ -438,4 +435,9 @@ def publish(local: bool) -> None:
         save()
     if to_delete:
         print(f"  removed {len(to_delete)} files that are no longer published")
+    # 4. "Preguntale al portal" reads only this copy of the ask_* views (after the R2 cleanup, so
+    # a failed copy never leaves unpublished files behind; on failure the copy is emptied)
+    from .ask_sync import sync
+
+    sync(local)
     print(f"Published {len(manifests)} documents to {target} D1/R2.")
