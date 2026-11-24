@@ -24,12 +24,12 @@ import { formatMoney, formatMoneyShort, formatPeriod, formatPeriodShort } from "
  */
 export const SERIES = ["#286cf0", "#00c27f", "#8c62ff", "#f59e0b", "#05aed3"] as const;
 export const OTHER = "#a4a7ae"; // "Otros" (folded series), gray-400
-const GRID = "#e5e5e5"; // gray-200
-const AXIS = "#717680"; // gray-500
+export const GRID = "#e5e5e5"; // gray-200
+export const AXIS = "#717680"; // gray-500
 
-const axisProps = { tick: { fill: AXIS, fontSize: 12 }, tickLine: false, axisLine: false } as const;
+export const axisProps = { tick: { fill: AXIS, fontSize: 12 }, tickLine: false, axisLine: false } as const;
 
-function Legend({ items }: { items: { label: string; color: string }[] }) {
+export function Legend({ items }: { items: { label: string; color: string }[] }) {
   return (
     <ul className="flex flex-wrap gap-x-4 gap-y-1 text-xs text-gray-700">
       {items.map((i) => (
@@ -42,7 +42,15 @@ function Legend({ items }: { items: { label: string; color: string }[] }) {
   );
 }
 
-function TooltipBox({ title, rows }: { title: string; rows: { label: string; value: number; color: string }[] }) {
+export function TooltipBox({
+  title,
+  rows,
+  format = formatMoney,
+}: {
+  title: string;
+  rows: { label: string; value: number; color: string }[];
+  format?: (n: number) => string;
+}) {
   return (
     <div className="rounded-lg border border-gray-200 bg-white px-3 py-2 text-xs shadow-lg">
       <div className="mb-1 font-semibold text-gray-900">{title}</div>
@@ -52,7 +60,7 @@ function TooltipBox({ title, rows }: { title: string; rows: { label: string; val
             <span className="size-2 rounded-sm" style={{ background: r.color }} aria-hidden />
             {r.label}
           </span>
-          <span className="tabular font-semibold text-gray-900">{formatMoney(r.value)}</span>
+          <span className="tabular font-semibold text-gray-900">{format(r.value)}</span>
         </div>
       ))}
     </div>
@@ -60,10 +68,10 @@ function TooltipBox({ title, rows }: { title: string; rows: { label: string; val
 }
 
 /** "Ver tabla": the same numbers as a table (accessibility, and the contrast relief rule). */
-function TableView({ children }: { children: ReactNode }) {
+export function TableView({ children }: { children: ReactNode }) {
   const [open, setOpen] = useState(false);
   return (
-    <div className="mt-2">
+    <div className="mt-2 print:hidden">
       <button className="text-xs font-medium text-primary hover:underline" onClick={() => setOpen((o) => !o)} aria-expanded={open}>
         {open ? "Ocultar tabla" : "Ver tabla"}
       </button>
@@ -72,8 +80,8 @@ function TableView({ children }: { children: ReactNode }) {
   );
 }
 
-const th = "px-3 py-1.5 text-left text-xs font-semibold uppercase tracking-wider text-gray-500";
-const td = "tabular px-3 py-1.5 text-right";
+export const th = "px-3 py-1.5 text-left text-xs font-semibold uppercase tracking-wider text-gray-500";
+export const td = "tabular px-3 py-1.5 text-right";
 
 // ---- Ingresos vs Gastos ------------------------------------------------------------------
 

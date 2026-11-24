@@ -189,6 +189,49 @@ export interface RubroStat {
   rubro: string;
   total: number;
 }
+export interface AsambleaMes {
+  mes: string;
+  gasto: number;
+  gasto_lineas: number;
+  ingresos: number | null;
+  egresos: number | null;
+  saldo_inicial: number | null;
+  saldo_final: number | null;
+  saldo_anterior: number | null;
+  mes_anterior: string | null;
+  honorarios: number;
+  central: number;
+  respaldado: number;
+  falta_comprobante: number;
+  falta_pago: number;
+  falta_ambos: number;
+  sin_legajo: number;
+}
+export interface AsambleaObra {
+  id: number;
+  nombre: string;
+  aprobado: number | null;
+  criterio: string | null;
+  detalle: string | null;
+  gastado: number;
+  respaldado: number;
+  gastado_ejercicio: number;
+  lineas: number;
+  actas: number[];
+  observaciones: string[];
+}
+export interface Asamblea {
+  ejercicio: number | null;
+  ejercicios: number[];
+  desde?: string;
+  hasta?: string;
+  completo?: boolean;
+  mensual?: AsambleaMes[];
+  rubros?: { mes: string; rubro: string; total: number }[];
+  central_rubro?: string;
+  observaciones?: { tipo: string; estado: ObservationState; n: number; importe: number }[];
+  obras?: AsambleaObra[];
+}
 export interface VendorStat {
   proveedor: string;
   comprobantes: number;

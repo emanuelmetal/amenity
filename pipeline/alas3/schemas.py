@@ -387,6 +387,50 @@ class Acta(BaseModel):
         return str(self.numero) if self.numero else self.fecha
 
 
+UNITS = 64  # functional units of Torre 3 (cuotas per unit x UNITS = approved total)
+
+
+class Obra(BaseModel):
+    """A work approved by an acta and paid with cuotas or the fondo de obra ("Informe para la
+    asamblea": approved vs spent vs backed). Curated by hand; the owner confirms the amounts."""
+
+    model_config = ConfigDict(extra="forbid")
+    nombre: str = Field(min_length=1, max_length=120)
+    aprobado: float | None = Field(default=None, gt=0)  # approved total, when the acta states it
+    cuota_por_unidad: float | None = Field(default=None, gt=0)  # or: per-unit cuota ...
+    cuotas: int | None = Field(default=None, ge=1)  # ... times this many cuotas (x UNITS)
+    detalle: str | None = Field(default=None, max_length=1000)  # roles only
+    actas: list[str] = Field(default_factory=list)  # Acta.key (numero, or fecha)
+    gastos: list[int] = Field(default_factory=list)  # expense line ids
+    observaciones: list[str] = Field(default_factory=list)  # Observation ids
+
+    @model_validator(mode="after")
+    def _check(self) -> Obra:
+        if self.aprobado is not None and self.cuota_por_unidad is not None:
+            raise ValueError(f"obra {self.nombre}: give `aprobado` or `cuota_por_unidad`, not both")
+        if (self.cuota_por_unidad is None) != (self.cuotas is None):
+            raise ValueError(f"obra {self.nombre}: `cuota_por_unidad` needs `cuotas` (and vice versa)")
+        return self
+
+    @property
+    def total_aprobado(self) -> float | None:
+        if self.aprobado is not None:
+            return self.aprobado
+        if self.cuota_por_unidad is not None and self.cuotas is not None:
+            return self.cuota_por_unidad * self.cuotas * UNITS
+        return None
+
+    @property
+    def criterio(self) -> str | None:
+        if self.aprobado is not None:
+            return "monto aprobado en el acta"
+        if self.cuota_por_unidad is not None:
+            cuota = f"{self.cuota_por_unidad:,.0f}".replace(",", ".")
+            n = "cuota" if self.cuotas == 1 else "cuotas"
+            return f"$ {cuota} por unidad × {UNITS} unidades × {self.cuotas} {n}"
+        return None
+
+
 class ActaBook(BaseModel):
     """data/work/extract/actas.json: transcription of the minutes book (Claude Code reads
     the photos). One file for the whole book, because an acta crosses photos."""
@@ -395,6 +439,7 @@ class ActaBook(BaseModel):
     folios: dict[str, ActaFolio] = Field(default_factory=dict)  # FOLIO_KEY -> page
     actas: list[Acta] = Field(default_factory=list)
     titulos: dict[str, str] = Field(default_factory=dict)  # sha16 of a PDF -> document title
+    obras: list[Obra] = Field(default_factory=list)  # approved works (Informe para la asamblea)
 
     @model_validator(mode="after")
     def _check(self) -> ActaBook:
@@ -414,6 +459,14 @@ class ActaBook(BaseModel):
         dup = {k for k in keys if keys.count(k) > 1}
         if dup:
             raise ValueError(f"duplicated actas: {sorted(dup)}")
+        names = [o.nombre for o in self.obras]
+        dup = {n for n in names if names.count(n) > 1}
+        if dup:
+            raise ValueError(f"duplicated obras: {sorted(dup)}")
+        for o in self.obras:
+            missing = [k for k in o.actas if k not in keys]
+            if missing:
+                raise ValueError(f"obra {o.nombre}: unknown actas {missing}")
         return self
 
 

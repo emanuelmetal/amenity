@@ -24,7 +24,7 @@ from .actas import load_book
 from .classify import classify_text
 from .config import OUT, PHASE_KINDS, REPO, WORK
 from .extract import load_extract
-from .ids import acta_id, acta_item_ids, article_ids, expense_line_ids, ticket_ids
+from .ids import acta_id, acta_item_ids, article_ids, expense_line_ids, obra_id, ticket_ids
 from .ingest import doc_dir, load_manifests
 from .match import AUTO, collect, collect_movements, match, match_payments
 from .redact import redact_text
@@ -211,12 +211,14 @@ def _actas_sql(
         if not p.restricted
     }
     verified = set(review.actas_verified)
+    published_actas: dict[str, int] = {}
     for a in book.actas:
         page_ids = [pages[k] for k in a.folios if k in pages]
         if not page_ids:
             print(f"  ! acta {a.key}: none of its folios is published; skipped")
             continue
         aid = acta_id(a)
+        published_actas[a.key] = aid
         stmts.append(
             "INSERT INTO actas (id, numero, fecha, tipo, resumen, asistentes_json, page_ids_json, verified) VALUES "
             f"({aid}, {q(a.numero)}, {q(a.fecha)}, {q(a.tipo)}, {qr(a.resumen)}, "
@@ -236,6 +238,31 @@ def _actas_sql(
                 stmts.append(
                     f"INSERT INTO acta_expense_links (acta_item_id, expense_line_id) VALUES ({iid}, {lid});"
                 )
+    return stmts + _obras_sql(book, lines, published_actas)
+
+
+def _obras_sql(book: ActaBook, lines: set[int], actas: dict[str, int]) -> list[str]:
+    """Approved works (Informe para la asamblea), replaced in full. Links to unpublished
+    lines or actas are dropped with a warning, like the acta items'."""
+    stmts = ["DELETE FROM obra_expense_links;", "DELETE FROM obras;"]
+    for o in book.obras:
+        oid = obra_id(o)
+        acta_ids = []
+        for k in o.actas:
+            if k in actas:
+                acta_ids.append(actas[k])
+            else:
+                print(f"  ! obra {o.nombre}: acta {k} is not published; link dropped")
+        stmts.append(
+            "INSERT INTO obras (id, nombre, aprobado, criterio, detalle, acta_ids_json, observation_ids_json) VALUES "
+            f"({oid}, {qr(o.nombre)}, {q(o.total_aprobado)}, {q(o.criterio)}, {qr(o.detalle)}, "
+            f"{q(json.dumps(acta_ids))}, {q(json.dumps(o.observaciones))});"
+        )
+        for lid in dict.fromkeys(o.gastos):
+            if lid not in lines:
+                print(f"  ! obra {o.nombre}: expense line {lid} is not published; link dropped")
+                continue
+            stmts.append(f"INSERT INTO obra_expense_links (obra_id, expense_line_id) VALUES ({oid}, {lid});")
     return stmts
 
 

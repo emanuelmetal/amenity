@@ -1,4 +1,4 @@
-import { BookOpen, Building2, ChartColumn, ClipboardCheck, FileText, HelpCircle, LayoutDashboard, Menu, MessageSquare, NotebookPen, Receipt, Search, Sparkles } from "lucide-react";
+import { BookOpen, Building2, ChartColumn, Presentation, ClipboardCheck, FileText, HelpCircle, LayoutDashboard, Menu, MessageSquare, NotebookPen, Receipt, Search, Sparkles } from "lucide-react";
 import { useState, type FormEvent, type ReactNode } from "react";
 import { NavLink, Outlet, useNavigate } from "react-router";
 import { formatDate } from "../lib/format";
@@ -21,6 +21,7 @@ const NAV: { section: string; items: { to: string; label: string; icon: ReactNod
       { to: "/comprobantes", label: "Comprobantes", icon: <FileText size={18} /> },
       { to: "/analisis", label: "Análisis", icon: <ChartColumn size={18} /> },
       { to: "/observaciones", label: "Observaciones", icon: <ClipboardCheck size={18} /> },
+      { to: "/asamblea", label: "Asamblea", icon: <Presentation size={18} /> },
       { to: "/actas", label: "Actas", icon: <NotebookPen size={18} /> },
       { to: "/reglamento", label: "Reglamento", icon: <BookOpen size={18} /> },
     ],
@@ -84,7 +85,7 @@ export function AppShell() {
   };
   return (
     <div className="flex min-h-screen">
-      <aside className="sticky top-0 hidden h-screen w-[260px] shrink-0 lg:block">
+      <aside className="sticky top-0 hidden h-screen w-[260px] shrink-0 lg:block print:hidden">
         <Sidebar />
       </aside>
       {open && (
@@ -95,9 +96,9 @@ export function AppShell() {
           </aside>
         </div>
       )}
-      <div className="min-w-0 flex-1 p-2">
-        <div className="min-h-[calc(100vh-1rem)] rounded-lg bg-white shadow">
-          <div className="flex items-center gap-2 border-b border-gray-200 px-4 py-2 md:px-8">
+      <div className="min-w-0 flex-1 p-2 print:p-0">
+        <div className="min-h-[calc(100vh-1rem)] rounded-lg bg-white shadow print:min-h-0 print:shadow-none">
+          <div className="flex items-center gap-2 border-b border-gray-200 px-4 py-2 md:px-8 print:hidden">
             <Button variant="ghost" className="lg:hidden" onClick={() => setOpen(true)} aria-label="Abrir menú">
               <Menu size={18} />
             </Button>
@@ -112,7 +113,7 @@ export function AppShell() {
             </form>
             <span className="ml-auto hidden text-xs text-gray-400 sm:block">{formatDate(new Date())}</span>
           </div>
-          <main className="space-y-4 px-4 py-6 md:px-8">
+          <main className="space-y-4 px-4 py-6 md:px-8 print:p-0">
             <Outlet />
           </main>
         </div>
