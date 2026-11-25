@@ -319,3 +319,27 @@ def test_misprinted_closing_balance_needs_a_reviewed_correction():
     no_checkpoints = [(n, "\n".join(x for x in t.split("\n") if not x.startswith("Saldo al"))) for n, t in wrong]
     with pytest.raises(bank.StatementError):
         bank.parse(no_checkpoints, closing=1_056_000)  # nothing else to vouch for the rows
+
+
+@pytest.mark.parametrize(("tipo", "desc"), [("reintegro", "Reintegro o devolución"), ("haberes", "Pago de haberes")])
+def test_a_reviewed_private_row_is_hidden_and_renamed_and_a_typo_fails(tipo, desc):
+    from alas3.schemas import BankPrivateRow
+
+    base = bank.parse(pages())
+    mv = next(m for m in base.movements if m.kind == "debito" and m.comprobante)
+    ref = BankPrivateRow(
+        page=mv.page_nos[0], tipo=tipo, comprobante=mv.comprobante, importe=mv.importe, motivo="pago a una persona"
+    )
+    got = bank.parse(pages(), private=[ref]).movements
+    changed = [(a, b) for a, b in zip(base.movements, got, strict=True) if a != b]
+    assert [(a, b.descripcion) for a, b in changed] == [(mv, desc)]
+    lines = dict(pages())[ref.page].split("\n")
+    extra = bank.private_lines(lines, [ref]) - bank.private_lines(lines)
+    assert extra and mv.comprobante in lines[min(extra)]
+    for typo in (ref.model_copy(update={"comprobante": "999999"}), ref.model_copy(update={"importe": 1.5})):
+        with pytest.raises(bank.StatementError):
+            bank.parse(pages(), private=[typo])
+        with pytest.raises(bank.StatementError):
+            bank.check_private_rows(lines, [typo])
+    with pytest.raises(ValueError, match="not a readable statement"):
+        bank.statements(_manifest(dict(pages())), private=[ref.model_copy(update={"page": 99})])
