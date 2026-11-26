@@ -59,6 +59,7 @@ def test_published_text_is_redacted_and_table_replaced():
 
     log = ObservationLog()
     add(log, **_obs(detalle=f"Transferencia a CUIL {CUIL}", line_ids=[1, 2], respuesta="ok"))
+    add(log, **_obs(titulo="No corresponde", estado="descartada"))  # kept in the log, never published
     sql = build_sql([], observations=log)
     assert "12345678" not in sql
     db = migrated_db()

@@ -229,10 +229,12 @@ def ingest_file(path: Path, kind: str, force: bool = False) -> DocumentManifest:
 
     ov = load_overrides().get(manifest.work_dir_name, _Override())
     checked: dict = {}
+    private_rows: list = []
     if kind == "comprobantes":
         from .receipts import load_transcription
 
-        checked = load_transcription(manifest).checked  # fails loudly on a bad file
+        tr = load_transcription(manifest)  # fails loudly on a bad file
+        checked, private_rows = tr.checked, tr.bank_private
     plans: list[tuple[PageRecord, list[pymupdf.Rect]]] = []
     carry = False  # a debt block that continues from the previous page
     qr_payloads: dict[int, list[str]] = {}
@@ -266,7 +268,9 @@ def ingest_file(path: Path, kind: str, force: bool = False) -> DocumentManifest:
                 # Owners' payments (who paid tells who did not) and salary/refund transfers
                 # (they name a person): blacked out. The full text is
                 # kept privately so bank.py can still check the balance.
-                hidden |= bank.private_lines(row_texts)
+                page_private = [r for r in private_rows if r.page == page_no]
+                bank.check_private_rows(row_texts, page_private)
+                hidden |= bank.private_lines(row_texts, page_private)
                 bank.private_text_path(manifest, page_no).write_text("\n".join(row_texts))
             # Areas a person marked on a checked scan: blacked out in the image below, and the
             # OCR text read from them is dropped too (it would still be searchable).

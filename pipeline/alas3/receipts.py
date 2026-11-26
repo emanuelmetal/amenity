@@ -143,7 +143,7 @@ def build_with_origin(m: DocumentManifest) -> tuple[Comprobantes, list[int | Non
 
     # Bank statements are parsed, not transcribed; one that fails its balance check is
     # left for a human (its pages stay "to transcribe") and nothing of it is used.
-    statements, failed = bank.statements(m, {f.page: f.saldo_final for f in tr.bank_closing})
+    statements, failed = bank.statements(m, {f.page: f.saldo_final for f in tr.bank_closing}, tr.bank_private)
     # A cheque on a private page is never used (as with receipts), nor one whose page nobody
     # checked: its account data and signature must be blacked out (`checked`) before it is shown.
     cheques = [c for c in tr.cheques if c.page not in restricted and c.page in tr.checked]

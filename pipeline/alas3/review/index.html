@@ -51,7 +51,11 @@
   .pickfilters input[type=search] { flex:1 1 320px; font:inherit; border:1px solid var(--line); border-radius:8px; padding:6px 8px; }
   label.inline { display:inline-flex; gap:6px; align-items:center; font-size:13px; }
   .pickgrid { flex:1; overflow-y:auto; padding:16px; display:grid; gap:12px; grid-template-columns:repeat(auto-fill, minmax(220px, 1fr)); align-content:start; }
-  .pickcard { border:1px solid var(--line); border-radius:10px; padding:8px; display:grid; gap:6px; align-content:start; background:#fff; }
+  .pickcard { border:1px solid var(--line); border-radius:10px; padding:8px; display:grid; gap:6px; align-content:start; background:#fff; grid-template-columns:minmax(0,1fr); overflow-wrap:anywhere; }
+  .pickcard .cover { grid-template-columns:minmax(0,1fr); }
+  .pickcard .linkeditem { flex-wrap:wrap; }
+  .pickcard.picked, .pickcard.linked.picked { border-color:var(--ok); background:color-mix(in srgb, var(--ok) 6%, #fff); }
+  .picksettle { display:grid; gap:6px; padding:10px 16px; border-top:1px solid var(--line); background:var(--panel); max-height:35vh; overflow-y:auto; }
   .pickcard.linked { background:#fafafa; }
   .pickcard > img { width:100%; height:240px; object-fit:cover; object-position:top; border:1px solid var(--line); border-radius:6px; cursor:zoom-in; }
   .pickcard .thumbs img { height:56px; }
@@ -521,37 +525,153 @@ function openLinePicker(t) {
   const inMonth = (p) => month.value === "all" || (month.value === "near" ? near.has(p) : p === month.value);
   const isPay = t.type === "payment";
   const side = isPay ? "payment" : "receipt";
-  const what = isPay ? "este pago" : "este comprobante";
+  const what = isPay ? "el pago" : "el comprobante";
   const left = (l) => l[side]?.remaining ?? l.importe;
   const done = (l) => !!l[side]?.settled;
+  // Several lines can be marked and linked together. The marks live in this dialog (kept
+  // when the filters change); nothing is saved until "Vincular".
+  const marked = new Set(); // line ids
+  let saving = false;
+  const type = isPay ? "payment" : "ticket";
+  const cents = (n) => Math.round(n * 100) / 100;
+  const own = (l) => (l.items || []).find((i) => i.type === type && i.id === t.id);
+  const linkedHere = (l) => ["verified", "auto"].includes(own(l)?.status); // a proposal can still be marked
+  const others = (l) => (l.items || []).filter((i) => i.type === type && i.id !== t.id && i.status !== "pending");
+  const usedLines = () => data.all_lines.filter(linkedHere);
+  const markedLines = () => data.all_lines.filter((l) => marked.has(l.id));
+  // What these lines need from this item once the other items linked to them have paid what
+  // they can. Computed over the whole group (two transfers can pay the same two lines between
+  // them), so an item's money is never counted on two lines.
+  const demand = (lines) => {
+    const group = new Map(lines.map((l) => [l.id, l]));
+    for (let n = -1; n !== group.size;) { // add the lines those other items also pay
+      n = group.size;
+      const ids = new Set([...group.values()].flatMap(others).map((i) => i.id));
+      for (const l of data.all_lines) if (others(l).some((i) => ids.has(i.id))) group.set(l.id, l);
+    }
+    const open = new Map([...group.values()].map((l) => [l.id, Math.round(l.importe * 100)])); // cents still unpaid
+    const flow = new Map(); // "item:line" -> cents
+    const links = [...group.values()].flatMap((l) => others(l).map((i) => ({ i, l })));
+    // Move up to `amount` from an item to its lines, rerouting what others already gave.
+    const push = (item, amount, seen) => {
+      for (const { l } of links.filter((x) => x.i.id === item)) {
+        if (seen.has(l.id)) continue;
+        seen.add(l.id);
+        const key = `${item}:${l.id}`;
+        const add = (n) => flow.set(key, (flow.get(key) || 0) + n);
+        const direct = Math.min(amount, open.get(l.id));
+        if (direct > 0) { open.set(l.id, open.get(l.id) - direct); add(direct); return direct; }
+        for (const o of links.filter((x) => x.l.id === l.id && x.i.id !== item)) {
+          const ok = `${o.i.id}:${l.id}`, given = flow.get(ok) || 0;
+          if (given <= 0) continue;
+          const moved = push(o.i.id, Math.min(amount, given), seen);
+          if (moved > 0) { flow.set(ok, given - moved); add(moved); return moved; }
+        }
+      }
+      return 0;
+    };
+    const pay = (item, total, only) => {
+      let leftover = total, n;
+      while (leftover > 0 && (n = push(item, leftover, new Set(only)))) leftover -= n;
+      return total - leftover;
+    };
+    for (const i of new Map(links.map((x) => [x.i.id, x.i])).values()) pay(i.id, Math.round((i.total || 0) * 100), []);
+    // Then everything still unpaid that this item can reach, directly or by freeing others.
+    for (const l of lines) links.push({ i: t, l });
+    return pay(t.id, 1e15, []) / 100;
+  };
+  // Balance of this item not yet taken by linked or marked lines (`but`: leave one out).
+  const rest = (but) => cents((t.total || 0) - demand([...usedLines(), ...markedLines().filter((l) => l.id !== but)]));
+  let refreshers = []; // per visible card: updated in place, so the grid keeps its scroll
+  const refresh = () => { const all = rest(); refreshers.forEach((f) => f(all)); drawSettle(); };
+  const toggle = (l) => { if (saving) return; marked.has(l.id) ? marked.delete(l.id) : marked.add(l.id); error.textContent = ""; refresh(); };
+  const error = el("div", { style: "color:var(--bad); font-size:13px", role: "alert" });
+  const settle = el("div", { class: "picksettle", "aria-live": "polite" });
+  const drawSettle = () => {
+    const used = usedLines(), ls = markedLines(), r = rest();
+    const usedSum = demand(used), markedSum = cents((t.total || 0) - usedSum - r);
+    const verdict = t.total == null ? el("span", { class: "tag pending" }, "Sin total: cargalo antes de vincular")
+      : !used.length && !ls.length ? el("span", { class: "muted" }, "Marcá uno o más gastos")
+      : Math.abs(r) <= 0.01 ? el("span", { class: "tag verified" }, "Cierra justo")
+      : r > 0 ? el("span", { class: "tag pending" }, `Sobran ${fmt(r)} sin gasto`)
+      : el("span", { class: "tag pending", style: "color:var(--bad); border-color:var(--bad)" }, `Los gastos superan ${what} por ${fmt(-r)}`);
+    settle.replaceChildren(
+      el("div", { class: "row", style: "align-items:center" },
+        el("strong", {}, `${isPay ? "Movimiento" : "Comprobante"} ${fmt(t.total)}`),
+        used.length ? el("span", { class: "muted" }, `− gastos ya vinculados ${fmt(usedSum)} (${used.length})`) : null,
+        ls.length ? el("span", { class: "muted" }, `− gastos marcados ${fmt(markedSum)} (${ls.length})`) : null,
+        verdict,
+        el("button", { class: "act", disabled: saving || !ls.length, onclick: () => { marked.clear(); error.textContent = ""; refresh(); } }, "Desmarcar todo"),
+        el("button", { class: "act ok", disabled: saving || !ls.length || t.total == null, onclick: linkMarked },
+          saving ? "Guardando…" : ls.length === 1 ? "Vincular 1 gasto" : `Vincular ${ls.length} gastos`)),
+      ls.length ? el("div", { class: "row" }, ls.map((l) => el("button", { class: "act", disabled: saving, title: "Quitar", onclick: () => toggle(l) },
+        `${l.concepto} · ${monthLabel(l.period)} · ${fmt(left(l))} ✕`))) : "",
+      used.length ? el("div", { class: "muted" }, "Ya vinculado a: ", used.map((l) => `${l.concepto} (${monthLabel(l.period)}) ${fmt(l.importe)}${others(l).length ? ", con otros " + (isPay ? "pagos" : "comprobantes") : ""}`).join("; ")) : "",
+      error);
+  };
+  const linkMarked = async () => {
+    if (saving) return;
+    saving = true; error.textContent = ""; drawSettle();
+    const total = marked.size;
+    const errors = [];
+    try {
+      for (const l of markedLines()) {
+        const r = await fetch("/api/action", { method: "POST", headers: { "Content-Type": "application/json", "X-Review": "1" }, body: JSON.stringify(linkBody(t, l.id, "verified")) });
+        if (r.ok) marked.delete(l.id);
+        else errors.push(`${l.concepto}: ${await r.text()}`);
+      }
+      await load();
+    } catch (e) { errors.push(`No se pudo hablar con el servidor de revisión (${e.message})`); }
+    saving = false;
+    if (!errors.length) { dlg.close(); toast(total === 1 ? "Vinculado" : `Vinculado a ${total} gastos`); return; }
+    // The toast is behind the dialog: say it here, with what failed still marked.
+    draw();
+    error.textContent = `${total - marked.size} de ${total} vinculados. ${errors.join(" · ")}`;
+  };
   const grid = el("div", { class: "pickgrid" });
   const count = el("span", { class: "muted" });
   const norm = (x) => String(x ?? "").toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "");
   const draw = () => {
     const words = norm(q.value).split(/\s+/).filter(Boolean);
+    const avail = rest();
+    const target = avail > 0.01 ? avail : t.total || 0; // closest to what is still free
     const rows = data.all_lines
       .filter((l) => inMonth(l.period))
       .filter((l) => {
         const hay = norm(`${l.period} ${l.rubro} ${l.concepto} ${l.detalle} ${fmt(l.importe)} ${l.importe}`);
         return words.every((w) => hay.includes(w));
       })
-      .sort((a, b) => (done(a) - done(b)) || (near.has(b.period) - near.has(a.period)) || Math.abs(left(a) - t.total) - Math.abs(left(b) - t.total));
+      .sort((a, b) => (done(a) - done(b)) || (near.has(b.period) - near.has(a.period)) || Math.abs(left(a) - target) - Math.abs(left(b) - target));
     count.textContent = `${rows.length} gastos`;
+    refreshers = [];
     grid.replaceChildren(...rows.map((l) => {
-      const here = (l.items || []).some((i) => i.type === (isPay ? "payment" : "ticket") && i.id === t.id);
-      const after = Math.round((left(l) - t.total) * 100) / 100;
-      return el("article", { class: `pickcard ${done(l) ? "linked" : ""}` },
+      const here = linkedHere(l);
+      const box = el("input", { type: "checkbox", disabled: here, onchange: () => toggle(l) });
+      const hint = el("div", { class: "muted" });
+      const card = el("article", { class: `pickcard ${done(l) ? "linked" : ""}` },
         el("div", { class: "muted" }, `${monthLabel(l.period)} · ${l.rubro}`),
         el("div", {}, el("strong", {}, l.concepto), l.detalle ? ` — ${l.detalle}` : ""),
         el("div", { class: "amount" }, fmt(l.importe)),
         coverageBlock(l),
         l.pages.length ? el("button", { class: "act", onclick: () => zoom(`/img/${l.pages[0].doc}/${l.pages[0].page}.webp`) }, `Ver liquidación (pág. ${l.pages[0].page})`) : null,
-        here ? el("span", { class: "tag verified" }, `Ya vinculado a ${what}`)
-          : el("div", { class: "muted" }, Math.abs(after) <= 0.01 ? `Con ${what}: ${isPay ? "pago" : "comprobantes"} completo${isPay ? "" : "s"}`
-            : after > 0 ? `Con ${what}: falta ${fmt(after)}` : `Con ${what}: excede por ${fmt(-after)}`),
-        el("button", { class: "act ok", disabled: here, onclick: async () => { dlg.close(); await act(linkBody(t, l.id, "verified")); } }, "Vincular a este gasto"));
+        here ? el("span", { class: "tag verified" }, `Ya vinculado a ${what}`) : hint,
+        here ? null : el("label", { class: "inline" }, box, " Vincular a este gasto"));
+      const update = (all) => {
+        box.checked = marked.has(l.id);
+        card.classList.toggle("picked", marked.has(l.id));
+        const free = marked.has(l.id) ? rest(l.id) : all; // what the other marked lines leave for this one
+        const after = cents(left(l) - free);
+        hint.textContent = left(l) <= 0.01 ? `Este gasto ya tiene ${isPay ? "el pago completo" : "los comprobantes completos"}`
+          : free <= 0.01 ? `No queda saldo de ${what}`
+          : Math.abs(after) <= 0.01 ? `Completa este gasto y ${what} cierra justo`
+          : after > 0 ? `Con ${fmt(free)} disponibles: a este gasto le faltan ${fmt(after)}`
+          : `Completa este gasto; sobran ${fmt(-after)}`;
+      };
+      refreshers.push(update);
+      return card;
     }));
     if (!rows.length) grid.replaceChildren(el("div", { class: "empty" }, "Nada coincide. Probá con otro mes."));
+    refresh();
   };
   q.addEventListener("input", draw);
   month.addEventListener("change", draw);
@@ -565,7 +685,7 @@ function openLinePicker(t) {
           t.descripcion ? el("div", { class: "muted clamp" }, t.descripcion) : null)),
       el("button", { class: "act", onclick: () => dlg.close() }, "Cerrar")),
     el("div", { class: "pickfilters" }, q, el("label", { class: "inline" }, "Mes ", month), count),
-    grid);
+    grid, settle);
   draw();
   dlg.showModal();
   q.focus();

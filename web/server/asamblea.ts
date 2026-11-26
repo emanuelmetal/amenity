@@ -72,7 +72,7 @@ asamblea.get("/", async (c) => {
       )
       .bind(desde, hasta)
       .all(),
-    // Raised about a month of this ejercicio. Every state is shown, "descartada" included.
+    // Raised about a month of this ejercicio. Discarded ones are never published (publish.py).
     db
       .prepare(
         `SELECT tipo, estado, COUNT(*) AS n, COALESCE(SUM(importe), 0) AS importe FROM observations

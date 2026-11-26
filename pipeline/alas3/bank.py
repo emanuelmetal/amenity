@@ -14,6 +14,7 @@ Privacy (fail-closed):
   through redact_text.
 - Transfers of salaries and refunds name a person: blacked out on the page too
   (`private_lines`) and published as "Pago de haberes" / "Reintegro o devolución".
+  One the bank's text does not name as such is listed in the transcription (`bank_private`).
 - A statement is used only when opening balance + every movement equals the closing
   balance and every daily "Saldo al" checkpoint; otherwise its pages are reported as
   still to transcribe and nothing of it is used.
@@ -23,9 +24,10 @@ from __future__ import annotations
 
 import re
 from collections import defaultdict
+from collections.abc import Iterable
 
 from .redact import redact_text
-from .schemas import BankItem, BankMovement, BankStatement, DocumentManifest
+from .schemas import BankItem, BankMovement, BankPrivateRow, BankStatement, DocumentManifest
 
 MARKER = "RESUMEN DE CUENTA CORRIENTE"
 CENT = 0.005
@@ -116,7 +118,28 @@ def credit_lines(lines: list[str]) -> set[int]:
     return {i for i, k in enumerate(row_kinds(lines)) if k in ("credit", "credit+")}
 
 
-def private_lines(lines: list[str]) -> set[int]:
+PRIVATE_DESC = {"reintegro": "Reintegro o devolución", "haberes": "Pago de haberes"}
+
+
+def _private_row(line: str, rows: Iterable[BankPrivateRow]) -> BankPrivateRow | None:
+    """The reviewed entry (transcription `bank_private`) for this movement row, if any."""
+    m = _ROW.match(line.strip())
+    if not m:
+        return None
+    return next(
+        (r for r in rows if m["comprobante"] == r.comprobante and abs(money(m["importe"]) + r.importe) < CENT), None
+    )
+
+
+def check_private_rows(lines: list[str], rows: Iterable[BankPrivateRow]) -> None:
+    """Every `bank_private` row of a page must be found on it: a typo would leave the name published."""
+    for r in rows:
+        n = sum(_private_row(line, [r]) is not None for line in lines)
+        if n != 1:
+            raise StatementError(f"bank_private: {n} rows for voucher {r.comprobante} on page {r.page}")
+
+
+def private_lines(lines: list[str], rows: Iterable[BankPrivateRow] = ()) -> set[int]:
     """Lines to black out on a published statement page: owners' payments, and salary or
     refund transfers (they name a person), each with its wrapped lines."""
     out: set[int] = set()
@@ -125,7 +148,7 @@ def private_lines(lines: list[str]) -> set[int]:
         if kind == "credit":
             hide = True
         elif kind == "debit":
-            hide = bool(_SALARY.search(line) or _REFUND.search(line))
+            hide = bool(_SALARY.search(line) or _REFUND.search(line) or _private_row(line, rows))
         elif kind not in ("credit+", "debit+"):
             hide = False
         if hide:
@@ -152,7 +175,9 @@ def _public_desc(desc: str) -> str:
     return redact_text(desc) or ""
 
 
-def parse(pages: list[tuple[int, str]], closing: float | None = None) -> BankStatement:
+def parse(
+    pages: list[tuple[int, str]], closing: float | None = None, private: Iterable[BankPrivateRow] = ()
+) -> BankStatement:
     """pages: [(page_no, full private text)] of ONE statement, in order.
 
     `closing`: a reviewed correction of a misprinted closing balance (transcription
@@ -171,6 +196,8 @@ def parse(pages: list[tuple[int, str]], closing: float | None = None) -> BankSta
     checkpoints: list[tuple[int, float]] = []  # (number of rows before it, balance)
     for page_no, text in pages:
         lines = text.split("\n")
+        page_private = [r for r in private if r.page == page_no]
+        check_private_rows(lines, page_private)
         last: dict | None = None
         for line, kind in zip(lines, row_kinds(lines), strict=True):
             line = line.strip()
@@ -185,7 +212,8 @@ def parse(pages: list[tuple[int, str]], closing: float | None = None) -> BankSta
                 if not m:
                     raise StatementError(f"page {page_no}: unreadable movement row")
                 last = {"fecha": iso(m["fecha"]), "comprobante": m["comprobante"], "codigo": m["codigo"],
-                        "desc": m["desc"], "importe": money(m["importe"]), "page_no": page_no}  # fmt: skip
+                        "desc": m["desc"], "importe": money(m["importe"]), "page_no": page_no,
+                        "private": _private_row(line, page_private)}  # fmt: skip
                 raw.append(last)
                 continue
             elif kind in ("credit+", "debit+") and last is not None:
@@ -225,7 +253,7 @@ def parse(pages: list[tuple[int, str]], closing: float | None = None) -> BankSta
             charge_pages.add(r["page_no"])
             continue
         movements.append(BankMovement(fecha=r["fecha"], comprobante=r["comprobante"], codigo=r["codigo"],
-                                      descripcion=_public_desc(desc), importe=round(-r["importe"], 2), page_nos=[r["page_no"]]))  # fmt: skip
+                                      descripcion=PRIVATE_DESC[r["private"].tipo] if r["private"] else _public_desc(desc), importe=round(-r["importe"], 2), page_nos=[r["page_no"]]))  # fmt: skip
     if charges:
         items = [BankItem(descripcion=k, importe=round(v[0], 2), cantidad=v[1])
                  for k, v in sorted(charges.items(), key=lambda kv: -kv[1][0])]  # fmt: skip
@@ -255,7 +283,9 @@ def private_text_path(m: DocumentManifest, page_no: int):
     return doc_dir(m) / "raw" / f"p{page_no:03d}.bank.txt"
 
 
-def statements(m: DocumentManifest, closings: dict[int, float] | None = None) -> tuple[list[BankStatement], list[int]]:
+def statements(
+    m: DocumentManifest, closings: dict[int, float] | None = None, private: Iterable[BankPrivateRow] = ()
+) -> tuple[list[BankStatement], list[int]]:
     """Statements in a document, and the statement pages that could not be verified.
 
     Consecutive statement pages form one statement; a new account number or a new
@@ -285,10 +315,13 @@ def statements(m: DocumentManifest, closings: dict[int, float] | None = None) ->
         else:
             groups.append([(p.page_no, text)])
         prev_no, prev_cuenta = p.page_no, cuenta
+    read = {n for g in groups for n, _ in g}
+    if stray := [r.page for r in private if r.page not in read]:
+        raise ValueError(f"{m.source_name}: bank_private on pages that are not a readable statement: {stray}")
     out: list[BankStatement] = []
     for g in groups:
         try:
-            out.append(parse(g, (closings or {}).get(g[0][0])))
+            out.append(parse(g, (closings or {}).get(g[0][0]), private))
         except StatementError as e:
             print(f"  ! {m.source_name} pages {g[0][0]}-{g[-1][0]}: bank statement not verified: {e}")
             failed += [n for n, _ in g]

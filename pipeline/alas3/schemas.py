@@ -265,6 +265,19 @@ class BankClosingFix(BaseModel):
     motivo: str = Field(min_length=10)
 
 
+class BankPrivateRow(BaseModel):
+    """A bank debit the owner identified as a refund or a salary paid to a person, though the
+    bank's text does not say so: blacked out on the page and published as
+    "Reintegro o devolución" / "Pago de haberes"."""
+
+    model_config = ConfigDict(extra="forbid")
+    page: int
+    tipo: Literal["reintegro", "haberes"]
+    comprobante: str = Field(pattern=r"^\d+$")  # the bank's voucher number
+    importe: float = Field(gt=0, allow_inf_nan=False)
+    motivo: str = Field(min_length=10)
+
+
 class TicketTranscription(BaseModel):
     """data/work/extract/<sha16>.tickets.json: hand/Claude transcription of a receipts PDF."""
 
@@ -284,6 +297,8 @@ class TicketTranscription(BaseModel):
     private_receipts: list[PrivateReceipt] = Field(default_factory=list)
     # Statements whose printed closing balance is wrong (see BankClosingFix).
     bank_closing: list[BankClosingFix] = Field(default_factory=list)
+    # Debits that are a refund or salary paid to a person (see BankPrivateRow).
+    bank_private: list[BankPrivateRow] = Field(default_factory=list)
 
 
 class BankItem(BaseModel):
