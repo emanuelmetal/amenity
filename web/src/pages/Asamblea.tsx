@@ -117,7 +117,7 @@ export default function Asamblea() {
   const open = obsRows.filter((o) => o.estado === "abierta" || o.estado === "enviada");
   const openN = open.reduce((a, o) => a + o.n, 0);
   const openAmount = open.reduce((a, o) => a + o.importe, 0);
-  const byEstado = ["abierta", "enviada", "respondida", "resuelta", "descartada"]
+  const byEstado = ["abierta", "enviada", "respondida", "resuelta"]
     .map((e) => ({ e, n: obsRows.filter((o) => o.estado === e).reduce((a, o) => a + o.n, 0) }))
     .filter((x) => x.n);
   const last = meses.at(-1)!;
@@ -301,8 +301,7 @@ export default function Asamblea() {
         {obsRows.length ? (
           <>
             <Conclusion>
-              {byEstado.map((x) => `${x.n} ${x.e}${x.n === 1 ? "" : "s"}`).join(", ")}. Sin resolver: {formatMoneyRound(openAmount)} en juego. Las descartadas se
-              muestran igual, con el motivo en la página de Observaciones.
+              {byEstado.map((x) => `${x.n} ${x.e}${x.n === 1 ? "" : "s"}`).join(", ")}. Sin resolver: {formatMoneyRound(openAmount)} en juego.
             </Conclusion>
             <ObservationsChart data={obsRows} />
           </>

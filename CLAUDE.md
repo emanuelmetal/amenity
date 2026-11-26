@@ -75,8 +75,8 @@ How to act:
   one entry per finding with its month, `tipo`, the evidence and arithmetic in `detalle` (es-AR, written
   for the owners: no person names, "el encargado", not their name), the amount at stake and the
   line/ticket/movement ids. Never delete one: move its `estado` (abierta → enviada → respondida →
-  resuelta | descartada) and record the administrator's `respuesta`. All of them are published to the
-  site's "Observaciones" page. `make observations` lists them; `make observations ARGS=--draft` prints
+  resuelta | descartada) and record the administrator's `respuesta`. All but the
+  `descartada` ones are published to the site's "Observaciones" page (those stay only in the file). `make observations` lists them; `make observations ARGS=--draft` prints
   the open ones as a message for the administrator.
 - All privacy rules above still apply to anything written for the administrator or the consejo.
 

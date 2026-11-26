@@ -85,7 +85,7 @@ export const VIEWS: Record<string, { desc: string; cols: Record<string, string> 
     desc: "Observaciones del control de las cuentas, para la administración.",
     cols: {
       id: "id texto", mes: "texto 'YYYY-MM'", tipo: "tipo de hallazgo", titulo: "título", detalle: "detalle", importe: "importe en juego",
-      estado: "'abierta', 'enviada', 'respondida', 'resuelta' o 'descartada'", fecha: "fecha", respuesta: "respuesta", fecha_respuesta: "fecha de la respuesta",
+      estado: "'abierta', 'enviada', 'respondida' o 'resuelta'", fecha: "fecha", respuesta: "respuesta", fecha_respuesta: "fecha de la respuesta",
     },
   },
   ask_actas: {

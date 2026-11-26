@@ -145,7 +145,8 @@ export default function Observaciones() {
             <MultiSelect label="Período" allLabel="Todos los períodos" plural="períodos" options={periodOptions} value={period} onChange={(v) => set("period", v)} className="w-48" />
             <Select value={estado} onChange={(e) => set("estado", e.target.value)} aria-label="Estado">
               <option value="">Todos los estados</option>
-              {Object.entries(STATE).map(([k, s]) => <option key={k} value={k}>{s.label}</option>)}
+              {/* Discarded observations are not published. */}
+              {Object.entries(STATE).filter(([k]) => k !== "descartada").map(([k, s]) => <option key={k} value={k}>{s.label}</option>)}
             </Select>
           </>
         }

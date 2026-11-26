@@ -76,9 +76,12 @@ def publishable(manifests: list[DocumentManifest]) -> list[DocumentManifest]:
 
 
 def _observations_sql(log: ObservationLog) -> list[str]:
-    """The auditor's observations, replaced in full (observations.json is the source)."""
+    """The auditor's observations, replaced in full (observations.json is the source). The
+    discarded ones stay in that file only: the site shows them nowhere (owner decision)."""
     stmts = ["DELETE FROM observations;"]
     for o in log.observations:
+        if o.estado == "descartada":
+            continue
         stmts.append(
             "INSERT INTO observations (id, period_id, tipo, titulo, detalle, importe, estado, fecha, respuesta, "
             "fecha_respuesta, line_ids_json, ticket_ids_json, movement_ids_json) VALUES "

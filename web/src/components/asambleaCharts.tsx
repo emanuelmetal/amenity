@@ -295,7 +295,6 @@ const ESTADOS: { key: ObservationState; label: string }[] = [
   { key: "enviada", label: "Enviada" },
   { key: "respondida", label: "Respondida" },
   { key: "resuelta", label: "Resuelta" },
-  { key: "descartada", label: "Descartada" },
 ];
 
 export function ObservationsChart({ data }: { data: { tipo: string; estado: ObservationState; importe: number }[] }) {
@@ -307,7 +306,7 @@ export function ObservationsChart({ data }: { data: { tipo: string; estado: Obse
       return r;
     })
     .sort((a, b) => ESTADOS.reduce((s, e) => s + Number(b[e.key]), 0) - ESTADOS.reduce((s, e) => s + Number(a[e.key]), 0));
-  const keys = ESTADOS.map((e, i) => ({ key: e.key, label: e.label, color: e.key === "descartada" ? OTHER : SERIES[i] }));
+  const keys = ESTADOS.map((e, i) => ({ key: e.key, label: e.label, color: SERIES[i] }));
   const cap = (s: string) => s.charAt(0).toUpperCase() + s.slice(1);
   return (
     <StackedBars

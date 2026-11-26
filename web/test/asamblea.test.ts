@@ -59,7 +59,7 @@ beforeEach(async () => {
     INSERT INTO expense_ticket_links (expense_line_id, ticket_id, score, status) VALUES (1, 100, 1.0, 'verified');
     INSERT INTO observations (id, period_id, tipo, titulo, detalle, importe, estado, fecha) VALUES
       ('2025-11-01', '2025-11', 'otro', 'Saldo inicial distinto', 'x', 37, 'abierta', '2026-11-20'),
-      ('2025-10-01', '2025-10', 'sin comprobante', 'Falta factura', 'x', 400, 'descartada', '2026-11-20'),
+      ('2025-10-01', '2025-10', 'sin comprobante', 'Falta factura', 'x', 400, 'resuelta', '2026-11-20'),
       ('2025-08-01', '2025-08', 'otro', 'Fuera del ejercicio', 'x', 5, 'abierta', '2026-11-20');
     INSERT INTO obras (id, nombre, aprobado, criterio, acta_ids_json, observation_ids_json)
       VALUES (9, 'Impermeabilización', 3200, '$ 50 por unidad × 64 unidades × 1 cuota', '[]', '[]');
@@ -112,11 +112,11 @@ describe("GET /api/asamblea", () => {
     expect(d.mensual.find((m: any) => m.mes === "2025-12").gasto_lineas).toBe(0);
   });
 
-  it("aggregates observations of the ejercicio only, descartadas included", async () => {
+  it("aggregates observations of the ejercicio only, by state", async () => {
     const d = await get("/api/asamblea?ejercicio=2025");
     expect(d.observaciones).toEqual([
       { tipo: "otro", estado: "abierta", n: 1, importe: 37 },
-      { tipo: "sin comprobante", estado: "descartada", n: 1, importe: 400 },
+      { tipo: "sin comprobante", estado: "resuelta", n: 1, importe: 400 },
     ]);
   });
 
